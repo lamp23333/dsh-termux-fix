@@ -105,7 +105,7 @@ dsh web
 
 ## 原理简述
 
-DSH 底层为 Linux 桌面设计，在 Android 上主要有四类水土不服：
+DSH 底层为 Linux 桌面设计，在 Android 上主要有五类水土不服：
 
 1. **文件系统**：f2fs + 加密分区禁 `link()` 系统调用，脚本用 preload 劫持 `fs.link` 在失败时 fallback 到 `rename`
 2. **沙箱**：官方 bwrap/Landlock 后端依赖 Linux 内核能力，Android 内核不提供，脚本用 proot 做路径级替代（`runnerCommand` 注入）
