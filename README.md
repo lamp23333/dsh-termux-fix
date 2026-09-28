@@ -88,15 +88,17 @@ dsh web
 | 5 | `~/bin/dsh` | HMR 插件崩溃（需 `--expose-internals`）+ 权限模式 |
 | 6 | `~/bin/bwrap-proot` | 沙箱后端缺失（bwrap 不可用，转 proot） |
 | 7 | `~/.dsh/profiles/web/cordis.patch.yml` | 沙箱 runnerCommand 注入 |
-| 8 | `dsh-subprocess-local` | 终端检查崩溃（平台检测拒绝 Android） |
-| 9 | `dsh-terminal-bash` | PTY 启动失败（shellPath 默认 `/bin/bash`） |
+| 8 | `dsh-subprocess-local`（动态定位） | 终端检查崩溃（平台检测拒绝 Android） |
+| 9 | `dsh-terminal-bash`（动态定位） | PTY 启动失败（shellPath 默认 `/bin/bash`） |
 | 10 | `node_modules/@img/sharp-wasm32` | sharp 无 android-arm64 原生二进制，启动报加载失败（attachment-local） |
-| 11 | `dsh-client-connection` | `dsh web` 自动打开浏览器后停在 authentication required |
+| 11 | `dsh-client-connection`（动态定位） | `dsh web` 自动打开浏览器后停在 authentication required |
 
 ## 脚本特性
 
 - **幂等**：可重复运行，已打补丁自动跳过，不会重复改
 - **自动备份**：包级修改自动备份 `.bak`，可回滚
+- **抗拆包**：包级补丁按「代码特征字符串」定位目标文件，不写死 `lib/index.js`。dsh 会把代码拆进 `lib/runner-launch-<hash>.js` 这类哈希命名文件（hash 每次发版都变），写死路径必然失效
+- **包缺失不误报**：对应包未安装时输出 `[SKIP]`，不计入失败项
 - **自检**：跑完输出 `[OK]/[FAIL]` 清单，12 项全部通过才算成功；sed 类修改会再 grep 复核，不符预期直接报 `[FAIL]`
 - **无敏感信息**：不碰 API Key、会话历史、凭据文件
 
