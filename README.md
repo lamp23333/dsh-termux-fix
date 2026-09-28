@@ -92,6 +92,7 @@ dsh web
 | 9 | `dsh-terminal-bash`（动态定位） | PTY 启动失败（shellPath 默认 `/bin/bash`） |
 | 10 | `node_modules/@img/sharp-wasm32` | sharp 无 android-arm64 原生二进制，启动报加载失败（attachment-local） |
 | 11 | `dsh-client-connection`（动态定位） | `dsh web` 自动打开浏览器后停在 authentication required |
+| 12 | `node-addon-require-builtin`（JS 兜底） | 官方无 android-arm64 原生产物，dsh 启动报 `No usable native binding found` |
 
 ## 脚本特性
 
@@ -110,6 +111,7 @@ DSH 底层为 Linux 桌面设计，在 Android 上主要有四类水土不服：
 2. **沙箱**：官方 bwrap/Landlock 后端依赖 Linux 内核能力，Android 内核不提供，脚本用 proot 做路径级替代（`runnerCommand` 注入）
 3. **路径**：`/bin/bash`、`/tmp` 等 Linux 标准路径在 Termux 不存在，脚本统一改到 `$PREFIX` 真实路径
 4. **原生依赖与浏览器认证**：sharp 在 android-arm64 无官方预编译二进制，脚本改用同版本 WASM 版替代；`dsh web` 自动打开浏览器时 `SameSite=Strict` 的认证 cookie 不被外部应用导航携带，脚本改为 `Lax`
+5. **原生扩展**：dsh 部分能力依赖 Node 原生 addon（如 `node-addon-require-builtin` 访问 Node 内部模块），官方只发布桌面平台预编译产物，脚本用 `--expose-internals` + 纯 JS 实现替代（拿到的是同一批 Node 内部模块实例）
 
 ## 免责声明
 
