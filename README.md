@@ -5,7 +5,7 @@
 
 ## 为什么需要它
 
-在 Android 设备上使用 Termux 部署 DeepSeek Harness 会遇到一系列问题。这个脚本把 11 个问题的修复全部固化，一次运行全部解决。
+在 Android 设备上使用 Termux 部署 DeepSeek Harness 会遇到一系列问题。
 
 ## 快速开始
 
@@ -77,7 +77,7 @@ cd ~/workspace   # 建议在专门目录启动
 dsh web
 ```
 
-## 补丁明细（11 项）
+## 补丁明细
 
 | # | 文件 / 修改 | 解决的原始问题 |
 |---|-------------|---------------|
@@ -93,6 +93,7 @@ dsh web
 | 10 | `node_modules/@img/sharp-wasm32` | sharp 无 android-arm64 原生二进制，启动报加载失败（attachment-local） |
 | 11 | `dsh-client-connection`（动态定位） | `dsh web` 自动打开浏览器后停在 authentication required |
 | 12 | `node-addon-require-builtin`（JS 兜底） | 官方无 android-arm64 原生产物，dsh 启动报 `No usable native binding found` |
+| 13 | `@deepseek-ai/node-addon-system`（本地编译） | `flock` 无 android-arm64 预编译产物，Agent 每轮运行报 `flock is not supported on android-arm64` |
 
 ## 脚本特性
 
@@ -100,8 +101,9 @@ dsh web
 - **自动备份**：包级修改自动备份 `.bak`，可回滚
 - **抗拆包**：包级补丁按「代码特征字符串」定位目标文件，不写死 `lib/index.js`。dsh 会把代码拆进 `lib/runner-launch-<hash>.js` 这类哈希命名文件（hash 每次发版都变），写死路径必然失效
 - **包缺失不误报**：对应包未安装时输出 `[SKIP]`，不计入失败项
-- **自检**：跑完输出 `[OK]/[FAIL]` 清单，12 项全部通过才算成功；sed 类修改会再 grep 复核，不符预期直接报 `[FAIL]`
+- **自检**：跑完输出 `[OK]/[FAIL]` 清单，所有项全部通过才算成功（依赖缺失的项显示 `[SKIP]` 且不计入）；sed 类修改会再 grep 复核，不符预期直接报 `[FAIL]`
 - **无敏感信息**：不碰 API Key、会话历史、凭据文件
+- **本地编译原生扩展**：`flock` 在 Termux 现场用 `clang` 编译（只需随 `nodejs` 包提供的 `node_api.h`），不依赖 node-gyp，也不需要联网下载预编译产物
 
 ## 原理简述
 
@@ -111,7 +113,9 @@ DSH 底层为 Linux 桌面设计，在 Android 上主要有五类水土不服：
 2. **沙箱**：官方 bwrap/Landlock 后端依赖 Linux 内核能力，Android 内核不提供，脚本用 proot 做路径级替代（`runnerCommand` 注入）
 3. **路径**：`/bin/bash`、`/tmp` 等 Linux 标准路径在 Termux 不存在，脚本统一改到 `$PREFIX` 真实路径
 4. **原生依赖与浏览器认证**：sharp 在 android-arm64 无官方预编译二进制，脚本改用同版本 WASM 版替代；`dsh web` 自动打开浏览器时 `SameSite=Strict` 的认证 cookie 不被外部应用导航携带，脚本改为 `Lax`
-5. **原生扩展**：dsh 部分能力依赖 Node 原生 addon（如 `node-addon-require-builtin` 访问 Node 内部模块），官方只发布桌面平台预编译产物，脚本用 `--expose-internals` + 纯 JS 实现替代（拿到的是同一批 Node 内部模块实例）
+5. **原生扩展**：dsh 部分能力依赖 Node 原生 addon，官方只发布桌面平台预编译产物。脚本按「能否本地编译」分两条路：
+    - **可编译的**（如 `node-addon-system` 的 `flock`，包内自带 `src/flock.c`）：用 `clang` 现场编译成 `system.node`，放入自建的 android-arm64 平台包并放开平台守卫——保留真原生语义，内核级文件锁可用
+    - **不可编译的**（如 `node-addon-require-builtin`，源码未公开）：用 `--expose-internals` + 纯 JS 实现替代（拿到的是同一批 Node 内部模块实例）
 
 ## 免责声明
 
