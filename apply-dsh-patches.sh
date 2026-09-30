@@ -10,7 +10,7 @@
 # 代码拆进 lib/runner-launch-<hash>.js 这类哈希命名的 chunk（hash 每次发版都
 # 变），写死路径必然失效。sed 同时兼容单引号 / 双引号两种写法。
 #
-# 覆盖 12 项必选修复：
+# 覆盖 13 项必选修复：
 #   1. ~/.gyp/include.gypi          —— node-pty 编译的 android_ndk_path
 #   2. ~/.npmrc                     —— npm 镜像（npmmirror + foreground-scripts）
 #   3. ~/.bashrc                    —— PATH 含 ~/bin（dsh 命令可找到）
@@ -23,6 +23,7 @@
 #  10. sharp WASM                   —— @img/sharp-wasm32 + @emnapi（attachment-local）
 #  11. dsh-client-connection        —— SameSite Strict → Lax（自动开浏览器可认证）
 #  12. node-addon-require-builtin   —— Android 无原生 binding，改用 --expose-internals 的 JS 实现
+#  13. node-addon-system            —— flock 的 android-arm64（本地编译 system.node + 放开平台守卫）
 # ============================================================================
 
 PREFIX="/data/data/com.termux/files/usr"
@@ -40,7 +41,7 @@ skip() { echo "  [SKIP] $*"; }
 pkg_ver() { node -p "require('$1/package.json').version" 2>/dev/null; }
 
 echo "================================================"
-echo " dsh Termux 一键补丁 (12 项必选)"
+echo " dsh Termux 一键补丁 (13 项必选)"
 echo "================================================"
 
 # ---------- 前置检查：dsh 主程序是否已安装 ----------
@@ -55,7 +56,7 @@ echo " 检测到 dsh 版本：$(pkg_ver "$DSH_ROOT")"
 echo ""
 
 # ---------- 1. gyp：node-pty 编译的 android_ndk_path ----------
-log "1/12 写入 ~/.gyp/include.gypi (node-pty 编译修复)"
+log "1/13 写入 ~/.gyp/include.gypi (node-pty 编译修复)"
 mkdir -p "$HOME_DIR/.gyp"
 if grep -q "android_ndk_path" "$HOME_DIR/.gyp/include.gypi" 2>/dev/null; then
   ok "~/.gyp/include.gypi（已存在，跳过）"
@@ -65,14 +66,14 @@ else
 fi
 
 # ---------- 2. npm 镜像 ----------
-log "2/12 配置 ~/.npmrc (npmmirror 镜像)"
+log "2/13 配置 ~/.npmrc (npmmirror 镜像)"
 touch "$HOME_DIR/.npmrc"
 grep -q '^registry=' "$HOME_DIR/.npmrc" || echo 'registry=https://registry.npmmirror.com' >> "$HOME_DIR/.npmrc"
 grep -q '^foreground-scripts=' "$HOME_DIR/.npmrc" || echo 'foreground-scripts=true' >> "$HOME_DIR/.npmrc"
 ok "~/.npmrc"
 
 # ---------- 3. PATH ----------
-log "3/12 配置 ~/.bashrc (PATH 含 ~/bin)"
+log "3/13 配置 ~/.bashrc (PATH 含 ~/bin)"
 touch "$HOME_DIR/.bashrc"
 # 仅清理会导致 HMR 报错的历史 NODE_OPTIONS，保留你自己设置的其它 NODE_OPTIONS
 [ -f "$HOME_DIR/.bashrc.bak" ] || cp "$HOME_DIR/.bashrc" "$HOME_DIR/.bashrc.bak"
@@ -81,7 +82,7 @@ grep -q 'HOME/bin' "$HOME_DIR/.bashrc" || echo 'export PATH=$HOME/bin:$PATH' >> 
 ok "~/.bashrc"
 
 # ---------- 4. fs.link fallback preload ----------
-log "4/12 写入 ~/dsh-link-fix.js (f2fs 硬链接 fallback)"
+log "4/13 写入 ~/dsh-link-fix.js (f2fs 硬链接 fallback)"
 cat > "$HOME_DIR/dsh-link-fix.js" <<'EOF'
 'use strict';
 const fs = require('fs');
@@ -129,7 +130,7 @@ EOF
 ok "~/dsh-link-fix.js"
 
 # ---------- 5. wrapper ----------
-log "5/12 写入 ~/bin/dsh (--expose-internals + preload + 权限模式)"
+log "5/13 写入 ~/bin/dsh (--expose-internals + preload + 权限模式)"
 mkdir -p "$HOME_DIR/bin"
 cat > "$HOME_DIR/bin/dsh" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
@@ -140,7 +141,7 @@ chmod +x "$HOME_DIR/bin/dsh"
 ok "~/bin/dsh"
 
 # ---------- 6. bwrap-proot ----------
-log "6/12 写入 ~/bin/bwrap-proot (bwrap→proot + PATH + /bin/bash 替换)"
+log "6/13 写入 ~/bin/bwrap-proot (bwrap→proot + PATH + /bin/bash 替换)"
 cat > "$HOME_DIR/bin/bwrap-proot" <<'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 export PATH="/data/data/com.termux/files/usr/bin:/data/data/com.termux/files/usr/bin/applets:${PATH:-}"
@@ -176,7 +177,7 @@ ok "~/bin/bwrap-proot"
 
 # ---------- 7. cordis.patch.yml ----------
 # 注意：已存在的文件不会被整体覆盖——只补齐缺失的 id 块，保留你手动添加的其它配置
-log "7/12 写入 ~/.dsh/profiles/web/cordis.patch.yml (runnerCommand + shellPath)"
+log "7/13 写入 ~/.dsh/profiles/web/cordis.patch.yml (runnerCommand + shellPath)"
 PATCH_YML="$HOME_DIR/.dsh/profiles/web/cordis.patch.yml"
 mkdir -p "$(dirname "$PATCH_YML")"
 if [ ! -f "$PATCH_YML" ]; then
@@ -226,7 +227,7 @@ fi
 # ---------- 8. subprocess-local：terminal inspection 的 android 兼容 ----------
 # dsh 0.1.5+ 把 createProcessInspector 拆进 lib/runner-launch-<hash>.js（hash 每次发版都变），
 # 因此这里按特征字符串「new LinuxProcessInspector」动态定位文件，绝不写死文件名。
-log "8/12 补丁 dsh-subprocess-local (terminal inspection android)"
+log "8/13 补丁 dsh-subprocess-local (terminal inspection android)"
 SB_ROOT="$DSH_NM/@deepseek-ai/dsh-subprocess-local"
 if [ ! -d "$SB_ROOT" ]; then
   skip "dsh-subprocess-local 未安装（跳过）"
@@ -257,7 +258,7 @@ fi
 
 # ---------- 9. terminal-bash：shellPath 默认值 ----------
 # 同样动态定位（谁含旧的 /bin/bash 默认值就改谁），兼容 rc.6 旧写法与 rc.7+ 新写法。
-log "9/12 补丁 dsh-terminal-bash (shellPath 默认值)"
+log "9/13 补丁 dsh-terminal-bash (shellPath 默认值)"
 TB_ROOT="$DSH_NM/@deepseek-ai/dsh-terminal-bash"
 if [ ! -d "$TB_ROOT" ]; then
   skip "dsh-terminal-bash 未安装（跳过）"
@@ -286,7 +287,7 @@ else
 fi
 
 # ---------- 10. sharp WASM（attachment-local 依赖 sharp，android-arm64 无原生二进制） ----------
-log "10/12 补装 sharp WASM (@img/sharp-wasm32 + @emnapi)"
+log "10/13 补装 sharp WASM (@img/sharp-wasm32 + @emnapi)"
 SHARP_DIR="$DSH_NM/sharp"
 WASM_SRC="$HOME_DIR/sharp-wasm/node_modules"
 if [ ! -d "$SHARP_DIR" ]; then
@@ -329,7 +330,7 @@ fi
 # ---------- 11. SameSite Strict → Lax（外部 intent 打开浏览器时携带 cookie） ----------
 # 认证逻辑在 0.1.2 搬到了 browser-auth.ts，但会被打包进 lib/index.js；这里依然动态定位，
 # 以防未来再次拆包。
-log "11/12 补丁 dsh-client-connection (SameSite Strict→Lax)"
+log "11/13 补丁 dsh-client-connection (SameSite Strict→Lax)"
 CC_ROOT="$DSH_NM/@deepseek-ai/dsh-client-connection"
 if [ ! -d "$CC_ROOT" ]; then
   skip "dsh-client-connection 未安装（跳过）"
@@ -356,7 +357,7 @@ fi
 # 官方只发布了 darwin / linux-x64 / linux-arm64-gnu / win32 预编译产物，没有 android-arm64，
 # 且源码未公开、无法本地编译。这里用纯 JS 实现替代：通过 --expose-internals 直接访问同一批
 # Node 内部模块（与原生 addon 拿到的是同一个模块实例），dsh 的模块解析拦截因此可正常工作。
-log "12/12 补丁 node-addon-require-builtin (Android 无原生 binding，改用 --expose-internals)"
+log "12/13 补丁 node-addon-require-builtin (Android 无原生 binding，改用 --expose-internals)"
 NA_ROOT="$DSH_NM/node-addon-require-builtin"
 NA_FILE="$NA_ROOT/lib/index.js"
 if [ ! -f "$NA_FILE" ]; then
@@ -400,13 +401,102 @@ EOF_JS
   fi
 fi
 
+# ---------- 13. node-addon-system：flock 的 android-arm64 ----------
+# 官方只发了 darwin / linux 预编译产物，没有 android-arm64。而 dsh-session-persistence-jsonl
+# 用它给每个 session 的 session.lock 加内核级独占锁，缺失会直接让 Agent 每轮运行失败
+# （flock is not supported on android-arm64）。同一包的 landlock-run 缺失只会被探针判为
+# unusable 并自动降级，flock 则是硬失败，所以只需要救这一个。
+# 包里自带 src/flock.c（Node-API v8，只依赖 node_api.h 与 sys/file.h，Android bionic 有
+# flock()），所以本地用 clang 编成 system.node，放进自建的平台包，再放开平台守卫。
+log "13/13 补丁 node-addon-system (flock 的 android-arm64 本地编译)"
+NS_ROOT="$DSH_NM/@deepseek-ai/node-addon-system"
+if [ ! -d "$NS_ROOT" ]; then
+  NS_ROOT=$(find "$DSH_NM" -maxdepth 4 -type d -path "*@deepseek-ai/node-addon-system" \
+            -not -path "*/node-addon-system/node_modules/*" 2>/dev/null | head -1)
+fi
+if [ ! -d "$NS_ROOT" ]; then
+  skip "node-addon-system 未安装（跳过）"
+elif [ ! -f "$NS_ROOT/src/flock.c" ]; then
+  fail "包内没有 src/flock.c（官方可能不再随包发源码），无法本地编译"
+elif [ ! -f "$PREFIX/include/node/node_api.h" ]; then
+  fail "缺少 Node 头文件（$PREFIX/include/node/node_api.h）"
+elif ! command -v clang >/dev/null 2>&1; then
+  fail "未找到 clang，无法编译 flock.c（可执行：pkg install clang）"
+else
+  NS_DEST="$NS_ROOT/node_modules/@deepseek-ai/node-addon-system-android-arm64"
+  mkdir -p "$NS_DEST/bin"
+  cat > "$NS_DEST/package.json" <<EOF_PKG
+{
+  "name": "@deepseek-ai/node-addon-system-android-arm64",
+  "version": "$(pkg_ver "$NS_ROOT")",
+  "main": "package.json",
+  "license": "BSD-3-Clause"
+}
+EOF_PKG
+
+  if [ -f "$NS_DEST/bin/system.node" ] && [ "$NS_DEST/bin/system.node" -nt "$NS_ROOT/src/flock.c" ]; then
+    ok "system.node 已是最新（跳过编译）"
+  else
+    # NAPI_MODULE_INIT 导出 napi_register_module_v1，不需要 node-gyp / binding.gyp
+    clang -shared -fPIC -O2 -I"$PREFIX/include/node" \
+      -o "$NS_DEST/bin/system.node" "$NS_ROOT/src/flock.c" 2>/dev/null
+    if [ -f "$NS_DEST/bin/system.node" ]; then
+      ok "已编译 system.node（$NS_DEST/bin/system.node）"
+    else
+      fail "clang 编译失败，请手动执行看报错："
+      echo "         clang -shared -fPIC -O2 -I\"$PREFIX/include/node\" -o \"$NS_DEST/bin/system.node\" \"$NS_ROOT/src/flock.c\""
+    fi
+  fi
+
+  # 自检脚本：真的 import flock.js 并取得一次锁（成功 exit 0）
+  cat > "$HOME_DIR/dsh-flock-check.mjs" <<'EOF_MJS'
+import { closeSync, openSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+const root = process.argv[2];
+const { tryLockExclusive } = await import(pathToFileURL(join(root, 'lib', 'flock.js')).href);
+const lockPath = join(process.env.HOME || '.', '.dsh-flock-check.lock');
+const fd = openSync(lockPath, 'w');
+try {
+  await tryLockExclusive(fd);
+} finally {
+  closeSync(fd);
+  rmSync(lockPath, { force: true });
+}
+EOF_MJS
+
+  ns_files=$(grep -rlF --exclude='*.bak' "flock is not supported on" "$NS_ROOT/lib" 2>/dev/null)
+  if [ -z "$ns_files" ]; then
+    fail "未找到 flock 平台守卫——dsh 结构可能已变，请人工检查 $NS_ROOT/lib"
+  else
+    ns_hit=0
+    for f in $ns_files; do
+      if grep -qE "platform !== .android." "$f"; then
+        ns_hit=$((ns_hit+1)); continue
+      fi
+      [ -f "$f.bak" ] || cp "$f" "$f.bak"
+      # 单引号写法（当前版本）
+      sed -i "s/if (platform !== 'linux' && platform !== 'darwin')/if (platform !== 'linux' \&\& platform !== 'darwin' \&\& platform !== 'android')/" "$f"
+      # 双引号写法（兼容）
+      sed -i 's/if (platform !== "linux" && platform !== "darwin")/if (platform !== "linux" \&\& platform !== "darwin" \&\& platform !== "android")/' "$f"
+      grep -qE "platform !== .android." "$f" && ns_hit=$((ns_hit+1))
+    done
+    if [ "$ns_hit" -gt 0 ]; then
+      ok "node-addon-system 已打补丁（$ns_hit 个文件）"
+    else
+      fail "sed 未生效——请人工检查 $NS_ROOT/lib"
+    fi
+  fi
+fi
+
+
 # ============ 自检 ============
 echo "================================================"
 echo " 自检结果"
 echo "================================================"
 
 c=0
-TOTAL=12
+TOTAL=13
 
 check() {
   local desc="$1"; shift
@@ -447,6 +537,14 @@ check_pkg "terminal-bash (shellPath)"     "$DSH_NM/@deepseek-ai/dsh-terminal-bas
 check_pkg "client-connection (SameSite)"  "$DSH_NM/@deepseek-ai/dsh-client-connection"  "SameSite=Lax"
 check_pkg "require-builtin (JS fallback)"  "$DSH_NM/node-addon-require-builtin"  "js-expose-internals"
 
+# flock 自检：产物存在、flock.js 已放开 android、真能拿到一次锁
+if [ -d "$NS_ROOT" ]; then
+  check "flock android (产物 + 可获锁)"  node "$HOME_DIR/dsh-flock-check.mjs" "$NS_ROOT"
+else
+  TOTAL=$((TOTAL-1))
+  echo "  [SKIP] flock android（node-addon-system 未安装）"
+fi
+
 # sharp 自检只在 dsh 确实依赖 sharp 时计入
 if [ -d "$SHARP_DIR" ]; then
   TOTAL=$((TOTAL+1))
@@ -459,8 +557,9 @@ echo "================================================"
 echo " 完成：$c / $TOTAL 项通过"
 echo ""
 echo " 说明："
-echo "   - 第 8、9、11、12 项为包级修改，首次执行会自动备份 .bak"
+echo "   - 第 8、9、11、12、13 项为包级修改，首次执行会自动备份 .bak"
 echo "   - 包级补丁按「特征字符串」动态定位文件，适配 dsh 拆包 / 改 hash 名"
 echo "   - npm 更新 dsh 后，包级补丁会被覆盖，请重新运行本脚本"
 echo "   - 第 10 项会自动匹配当前 sharp 版本并复用 ~/sharp-wasm 缓存"
+echo "   - 第 13 项用 clang 本地编译 flock.c（依赖随 nodejs 包提供的 node_api.h）"
 echo "   - 打完补丁后，用 'dsh web' 启动（建议先 cd ~/workspace）"
