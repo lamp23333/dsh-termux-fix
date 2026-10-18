@@ -2,6 +2,8 @@
 
 **一键补丁脚本**，让 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 在 Android Termux 环境正常运行。
 
+> [!WARNING]
+> **注意**：此文档已不再适用于最新版本的补丁。
 
 ## 为什么需要它
 
