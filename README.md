@@ -212,7 +212,7 @@ tar xzf dsh-home.tar.gz -C ~
 | Images cannot be sent when pasted | Item 14 did not take effect; check whether `dsh-attachment-local/lib/index.js` contains `dsh-android-sync-guard` |
 | It reports "Termux runtime environment not found" | You ran a file-writing command outside Termux; `status` / `help` still work |
 
-## Disclaimer
+## About this project
 
 - To stay compatible with Android, the sandbox backend uses proot for **path-level isolation**, which is not real kernel isolation and is less secure than the official bwrap/Landlock
 - It is suitable for **running trusted tasks on your own device**; do not use it to execute code of unknown origin

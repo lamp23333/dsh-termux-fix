@@ -212,7 +212,7 @@ tar xzf dsh-home.tar.gz -C ~
 | 貼上圖片後無法送出 | 第 14 項未生效，檢查 `dsh-attachment-local/lib/index.js` 裡是否有 `dsh-android-sync-guard` |
 | 報「找不到 Termux 執行環境」 | 你在 Termux 以外的環境執行了寫入檔案類指令；`status` / `help` 仍然可用 |
 
-## 聲明
+## 關於本專案
 
 - 為了相容 Android 系統，沙箱後端用 proot 是**路徑級隔離**，不是真正的核心隔離，安全性低於官方 bwrap/Landlock
 - 適合在**自己的裝置上跑可信任務**，不要用它執行來歷不明的程式碼
