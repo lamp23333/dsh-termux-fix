@@ -15,7 +15,7 @@
 > [!NOTE]
 > 注意：本项目开发的仅为可在 Termux 上运行的脚本文件，不是 DeepSeek Harness 插件。
 
-`如果你喜欢这个项目，记得点个 Star 喵！`
+`如果你喜欢这个项目，记得点个 Star 喵`
 
 ## 为什么需要它
 
@@ -141,7 +141,7 @@ dsh web
 | 2 | `~/.npmrc` | npm 默认源下载慢/失败（切 npmmirror） |
 | 3 | `~/.bashrc` | `dsh` 命令找不到（PATH 补 `~/bin`） |
 | 4 | `~/dsh-link-fix.js` | f2fs 文件系统禁硬链接，会话保存报 `EACCES` |
-| 5 | `~/bin/dsh` | HMR 插件崩溃（需 `--expose-internals`）+ 权限模式 |
+| 5 | `~/bin/dsh` | HMR 插件崩溃（需 `--expose-internals`）+ 权限模式（`DSH_PERMISSION_MODE`，默认 `danger-full-access`） |
 | 6 | `~/bin/bwrap-proot` | 沙箱后端缺失（bwrap 不可用，转 proot） |
 | 7 | `~/.dsh/profiles/web/cordis.patch.yml` | 沙箱 runnerCommand 注入 |
 | 8 | `dsh-subprocess-local`（动态定位） | 终端检查崩溃（平台检测拒绝 Android） |

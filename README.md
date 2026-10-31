@@ -13,9 +13,9 @@
 **A one-click patch script** that gets [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) running properly in Termux on Android.
 
 > [!NOTE]
-> Note: this project only provides script files that run on Termux; it is not a DeepSeek Harness plugin.
+> This project only provides scripts that run on Termux; it is not a DeepSeek Harness plugin.
 
-`If you like this project, please give it a star! `
+`If you like this project, a Star would be appreciated`
 
 ## Why it is needed
 
@@ -26,13 +26,13 @@ Deploying DeepSeek Harness with Termux on an Android device runs into a whole se
 ### Prerequisites
 
 - An Android phone + [Termux](https://termux.dev/)
-- More than 1.5 GB of free space on the device (`node-pty` and `flock` have to be compiled on the spot)
+- More than 1.5 GB of free space on the device (`node-pty` and `flock` have to be built on the device)
 - If `pkg install` is slow or fails, you can switch to a closer mirror with `termux-change-repo`
 - The first installation requires network access (npm registry). If it is slow, you can point npm at a faster mirror with `npm config set registry <mirror-url>`, and check the result with `npm config get registry`.
 
 ### 1. Download and import the patch
 
-First make sure curl and unzip are installed in Termux
+First make sure curl and unzip are installed in Termux.
 
 ```bash
 pkg install -y curl unzip
@@ -46,23 +46,23 @@ curl -O https://raw.githubusercontent.com/lamp23333/dsh-termux-fix/main/apply-ds
 
 **Option 2**: Download manually and import into Termux
 
-1. Get the patch file by downloading the repository zip or `apply-dsh-patches.sh` to your phone storage
+1. Get the patch file by downloading the repository zip or `apply-dsh-patches.sh` to your phone's storage
 2. Grant storage access in Termux
 ```bash
 termux-setup-storage
 ```
 (a permission dialog will pop up after running it; tap "Allow")
 
-3. Import the patch file into your home directory (that is, `~`, i.e. `/data/data/com.termux/files/home`)
+3. Import the patch file into your home directory (`~`, or `/data/data/com.termux/files/home`)
 
-- Copy a single file to import it
+- Copy a single file:
 ```bash
 cp /storage/emulated/0/[folder containing the patch]/apply-dsh-patches.sh ~/
 ```
 
 or
 
-- Unzip the repository zip archive and import it
+- Unzip the repository archive:
 ```bash
 cd ~
 unzip /storage/emulated/0/[folder containing the repository zip]/dsh-termux-fix-main.zip
@@ -75,7 +75,7 @@ cp ~/dsh-termux-fix-main/apply-dsh-patches.sh ~/
 
 ### 2. Install DeepSeek Harness
 
-> For the first installation, you can go with this one-shot lazy command:
+> For a first install, this single command does everything:
 >
 > ```bash
 > bash ~/apply-dsh-patches.sh all
@@ -83,7 +83,7 @@ cp ~/dsh-termux-fix-main/apply-dsh-patches.sh ~/
 
 > You can also do it in stages
 >
-> First install the environment dependencies, the prerequisite patch and DeepSeek Harness:
+> First install the system dependencies, the prerequisite patch and DeepSeek Harness:
 > ```bash
 > bash ~/apply-dsh-patches.sh install
 > ```
@@ -107,11 +107,11 @@ dsh web
 
 ### 4. Update DeepSeek Harness
 
-Updating works the same way as installing, but don't forget to re-apply the patches to lock them in~
+Updating works the same way as installing, but the patches have to be re-applied afterwards.
 
 ### Remarks
 
-Packages installed by the patch via pkg install:
+Packages that the patch installs via `pkg install`:
 ```
 Runtime: node nodejs bash proot sed grep tar gzip diffutils findutils coreutils
 Build time: clang make python pkg-config
@@ -119,7 +119,7 @@ Build time: clang make python pkg-config
 
 ## Commands
 
-No arguments = print the usage instructions (`help`).
+With no arguments, it prints the usage instructions (`help`).
 
 | Command | Purpose |
 | --- | --- |
@@ -128,7 +128,7 @@ No arguments = print the usage instructions (`help`).
 | `patch` | Install patches only |
 | `install` | Install DeepSeek Harness only |
 | `all` | Install DeepSeek Harness and the patches |
-| `channels` | Query the latest DeepSeek Harness version |
+| `channels` | Check the latest DeepSeek Harness version |
 | `backup` | Back up data (sessions, configuration, patch artifacts, workspace) |
 | `uninstall` | Uninstall DeepSeek Harness and the patches |
 | `help` | Show the usage instructions |
@@ -141,16 +141,16 @@ No arguments = print the usage instructions (`help`).
 | 2 | `~/.npmrc` | The default npm registry downloads slowly/fails (switch to npmmirror) |
 | 3 | `~/.bashrc` | The `dsh` command is not found (add `~/bin` to PATH) |
 | 4 | `~/dsh-link-fix.js` | The f2fs file system forbids hard links, so saving a session fails with `EACCES` |
-| 5 | `~/bin/dsh` | The HMR plugin crashes (requires `--expose-internals`) + permission mode |
+| 5 | `~/bin/dsh` | The HMR plugin crashes (requires `--expose-internals`); also sets the permission mode (`DSH_PERMISSION_MODE`, default `danger-full-access`) |
 | 6 | `~/bin/bwrap-proot` | The sandbox backend is missing (bwrap is unavailable, fall back to proot) |
 | 7 | `~/.dsh/profiles/web/cordis.patch.yml` | Sandbox runnerCommand injection |
 | 8 | `dsh-subprocess-local` (located dynamically) | The terminal check crashes (platform detection rejects Android) |
 | 9 | `dsh-terminal-bash` (located dynamically) | PTY fails to start (shellPath defaults to `/bin/bash`) |
 | 10 | `node_modules/@img/sharp-wasm32` | sharp has no android-arm64 native binary, so startup reports a load failure (attachment-local) |
-| 11 | `dsh-client-connection` (located dynamically) | After `dsh web` auto-opens the browser, it stops at authentication required |
+| 11 | `dsh-client-connection` (located dynamically) | After `dsh web` auto-opens the browser, it gets stuck at the "authentication required" step |
 | 12 | `node-addon-require-builtin` (JS fallback) | There is no official android-arm64 native artifact, so dsh fails at startup with `No usable native binding found` |
 | 13 | `@deepseek-ai/node-addon-system` (compiled locally) | `flock` has no prebuilt android-arm64 artifact, so every agent turn fails with `flock is not supported on android-arm64` |
-| 14 | `dsh-attachment-local` (located dynamically) | The attachment directory fsync exceeds its permissions, so pasting an image immediately fails with `prompt rejected (session/agent-busy)` |
+| 14 | `dsh-attachment-local` (located dynamically) | The fsync on the attachment directory goes beyond the permitted scope, so pasting an image immediately fails with `prompt rejected (session/agent-busy)` |
 
 - Items 3, 8, 9, 11, 12, 13 and 14 are post-install patches for DeepSeek Harness. They modify existing files during installation, and the first run backs up the originals as `.bak`.
 
@@ -158,12 +158,12 @@ No arguments = print the usage instructions (`help`).
 
 - **Idempotent**: re-running it is safe; already-applied patches are skipped automatically and nothing is changed twice
 - **Automatic backup**: package-level changes are automatically backed up as `.bak` and can be rolled back
-- **Code-split-proof**: package-level patches locate the target files by "code signature strings" instead of hard-coding `lib/index.js`. dsh splits its code into hash-named files such as `lib/runner-launch-<hash>.js` (the hash changes with every release), so hard-coded paths are bound to break
+- **Survives code splitting**: package-level patches locate the target files by "code signature strings" instead of hard-coding `lib/index.js`. dsh splits its code into hash-named files such as `lib/runner-launch-<hash>.js` (the hash changes with every release), so hard-coded paths are bound to break
 - **No false alarms for missing packages**: when the corresponding package is not installed, it prints `[SKIP]` and does not count it as a failure
 - **Self-check**: when it finishes it prints an `[OK]/[FAIL]` list, and everything must pass for it to count as success (items whose dependencies are missing show `[SKIP]` and are not counted); sed-based changes are re-checked with grep, and anything unexpected is reported directly as `[FAIL]`
-- **No sensitive information**: it never touches API Keys, session history or credential files
-- **Locally compiled native extensions**: `flock` is compiled on the spot in Termux with `clang` (it only needs `node_api.h` provided with the `nodejs` package); it does not depend on node-gyp and does not need to download prebuilt artifacts over the network
-- **Path self-adaptation**: `PREFIX` / `HOME` are validated before being adopted (non-empty, absolute path, shaped like `.../com.termux/files/usr`, `$PREFIX/bin/bash` actually executable); if any check fails it falls back to the official default paths. The generated wrapper and `cordis.patch.yml` are also injected with the actual paths
+- **Hands off sensitive data**: it never touches API keys, session history or credential files
+- **Locally compiled native extensions**: `flock` is built on the device in Termux with `clang` (it only needs `node_api.h` provided with the `nodejs` package); it does not depend on node-gyp and does not need to download prebuilt artifacts over the network
+- **Automatic path handling**: `PREFIX` / `HOME` are validated before being adopted (non-empty, absolute path, shaped like `.../com.termux/files/usr`, `$PREFIX/bin/bash` actually executable); if any check fails it falls back to the official default paths. The generated wrapper and `cordis.patch.yml` are also injected with the actual paths
 - **Diagnosable outside Termux**: when not run inside Termux, `help` / `status` / `doctor` / `channels` still work as usual, while file-writing commands error out and exit immediately
 
 ## How it works, in brief
@@ -176,8 +176,8 @@ DSH is designed at its core for Linux desktops, and on Android it is mainly inco
 4. **Native dependencies**: sharp has no official prebuilt binary for android-arm64, so the script substitutes the WASM build of the same version
 5. **Browser authentication**: when `dsh web` auto-opens the browser, cookies with `SameSite=Strict` are not carried along by navigation from an external app, so the script changes it to `Lax`
 6. **Native extensions**: some dsh capabilities depend on Node native addons, and the official project only publishes prebuilt artifacts for desktop platforms. The script takes two routes depending on "whether it can be compiled locally":
-    - **Compilable ones** (such as `flock` in `node-addon-system`, whose package ships its own `src/flock.c`): compile it on the spot with `clang` into `system.node`, put it into a self-built android-arm64 platform package and lift the platform guard — true native semantics are preserved and kernel-level file locking is available
-    - **Non-compilable ones** (such as `node-addon-require-builtin`, whose source code is not public): replace it with `--expose-internals` + a pure JS implementation (what you get are instances of the very same Node internal modules)
+    - **Compilable ones** (such as `flock` in `node-addon-system`, whose package ships its own `src/flock.c`): build it locally with `clang` into `system.node`, put it into a self-built android-arm64 platform package and bypass the platform check — genuine native semantics are preserved and kernel-level file locking is available
+    - **Non-compilable ones** (such as `node-addon-require-builtin`, whose source code is not public): replace it with `--expose-internals` + a pure JS implementation (you get instances of the same Node internal modules)
 
 ## Backup and restore
 
@@ -201,7 +201,7 @@ Restore:
 tar xzf dsh-home.tar.gz -C ~
 ```
 
-## Troubleshooting some issues
+## Troubleshooting
 
 | Symptom | What to do |
 | --- | --- |
@@ -218,7 +218,7 @@ tar xzf dsh-home.tar.gz -C ~
 - It is suitable for **running trusted tasks on your own device**; do not use it to execute code of unknown origin
 - So far the developer has only verified feasibility on their own device. If you run into problems, you can turn to professionals and AI for help, and once a problem is found or solved, you are welcome to raise it in an issue
 - I am not a professional developer; if you intend to maintain this patch, please contact me at xingyunMC@outlook.com
-- This project has nothing to do with DeepSeek officially, and it is not used for any commercial activity
+- This project is not affiliated with DeepSeek, and is not intended for commercial use
 
 ## License
 
