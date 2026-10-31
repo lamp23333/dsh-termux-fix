@@ -15,7 +15,7 @@
 > [!NOTE]
 > 注意：本项目开发的仅为可在 Termux 上运行的脚本文件，不是 DeepSeek Harness 插件。
 
-`如果你喜欢这个项目，记得点个 Star 喵`
+`如果你喜欢这个项目，记得点个 Star 喵！`
 
 ## 为什么需要它
 
@@ -25,14 +25,14 @@
 
 ### 前置条件
 
-- Android 手机 + [Termux](https://termux.dev/)
-- 设备可用空间需大于 1.5 GB（`node-pty` 与 `flock` 要现场编译）
-- 可能需要使用 `termux-change-repo` 更换国内源
+- Android 手机 + [Termux](https://termux.dev/)。
+- 设备可用空间需大于 1.5 GB（`node-pty` 与 `flock` 要现场编译）。
+- 可能需要使用 `termux-change-repo` 更换国内源。
 - 首次安装需联网（npm registry），可能需要使用 `npm config set registry https://registry.npmmirror.com` 更换 npm 国内源，可以使用 `npm config get registry` 验证是否更改成功。
 
 ### 1. 下载并导入补丁
 
-首先确保已在 Termux 中安装了 curl 和 unzip
+首先确保已在 Termux 中安装了 curl 和 unzip。
 
 ```bash
 pkg install -y curl unzip
@@ -46,14 +46,14 @@ curl -O https://raw.githubusercontent.com/lamp23333/dsh-termux-fix/main/apply-ds
 
 **方式二**：手动下载导入 Termux
 
-1. 通过下载仓库zip文件或 `apply-dsh-patches.sh` 到手机存储来获取补丁文件
-2. 在 Termux 中授权访问存储
+1. 通过下载仓库zip文件或 `apply-dsh-patches.sh` 到手机存储来获取补丁文件。
+2. 在 Termux 中授权访问存储。
 ```bash
 termux-setup-storage
 ```
 （运行后会出现权限授权弹窗，点「允许」）
 
-3. 导入补丁文件到 Home 目录（也就是 `~` ，即 `/data/data/com.termux/files/home` ）
+3. 导入补丁文件到 Home 目录（也就是 `~` ，即 `/data/data/com.termux/files/home` ）。
 
 - 复制单文件导入
 ```bash
@@ -81,7 +81,7 @@ cp ~/dsh-termux-fix-main/apply-dsh-patches.sh ~/
 > bash ~/apply-dsh-patches.sh all
 > ```
 
-> 也可以分段进行
+> 也可以分段进行。
 >
 > 先安装环境依赖、前置补丁和 DeepSeek Harness：
 > ```bash
@@ -91,7 +91,7 @@ cp ~/dsh-termux-fix-main/apply-dsh-patches.sh ~/
 > ```bash
 > bash ~/apply-dsh-patches.sh status
 > ```
-> 确认为“阶段 2/3”
+> 确认为“阶段 2/3”。
 >
 > 最后补齐后续补丁：
 > ```bash
@@ -156,28 +156,28 @@ dsh web
 
 ## 脚本特性
 
-- **幂等**：可重复运行，已打补丁自动跳过，不会重复改
-- **自动备份**：包级修改自动备份 `.bak`，可回滚
-- **抗拆包**：包级补丁按「代码特征字符串」定位目标文件，不写死 `lib/index.js`。dsh 会把代码拆进 `lib/runner-launch-<hash>.js` 这类哈希命名文件（hash 每次发版都变），写死路径必然失效
-- **包缺失不误报**：对应包未安装时输出 `[SKIP]`，不计入失败项
-- **自检**：跑完输出 `[OK]/[FAIL]` 清单，所有项全部通过才算成功（依赖缺失的项显示 `[SKIP]` 且不计入）；sed 类修改会再 grep 复核，不符预期直接报 `[FAIL]`
-- **无敏感信息**：不碰 API Key、会话历史、凭据文件
-- **本地编译原生扩展**：`flock` 在 Termux 现场用 `clang` 编译（只需随 `nodejs` 包提供的 `node_api.h`），不依赖 node-gyp，也不需要联网下载预编译产物
-- **路径自适应**：`PREFIX` / `HOME` 先校验再采用（非空、绝对路径、形如 `.../com.termux/files/usr`、`$PREFIX/bin/bash` 真实可执行），任一不满足就回退官方默认路径；生成的 wrapper 与 `cordis.patch.yml` 也按实际路径注入
-- **非 Termux 可诊断**：不在 Termux 里跑时，`help` / `status` / `doctor` / `channels` 照常可用，写文件类命令会直接报错退出
+- **幂等**：可重复运行，已打补丁自动跳过，不会重复改。
+- **自动备份**：包级修改自动备份 `.bak`，可回滚。
+- **抗拆包**：包级补丁按「代码特征字符串」定位目标文件，不写死 `lib/index.js`。dsh 会把代码拆进 `lib/runner-launch-<hash>.js` 这类哈希命名文件（hash 每次发版都变），写死路径必然失效。
+- **包缺失不误报**：对应包未安装时输出 `[SKIP]`，不计入失败项。
+- **自检**：跑完输出 `[OK]/[FAIL]` 清单，所有项全部通过才算成功（依赖缺失的项显示 `[SKIP]` 且不计入）；sed 类修改会再 grep 复核，不符预期直接报 `[FAIL]`。
+- **无敏感信息**：不碰 API Key、会话历史、凭据文件。
+- **本地编译原生扩展**：`flock` 在 Termux 现场用 `clang` 编译（只需随 `nodejs` 包提供的 `node_api.h`），不依赖 node-gyp，也不需要联网下载预编译产物。
+- **路径自适应**：`PREFIX` / `HOME` 先校验再采用（非空、绝对路径、形如 `.../com.termux/files/usr`、`$PREFIX/bin/bash` 真实可执行），任一不满足就回退官方默认路径；生成的 wrapper 与 `cordis.patch.yml` 也按实际路径注入。
+- **非 Termux 可诊断**：不在 Termux 里跑时，`help` / `status` / `doctor` / `channels` 照常可用，写文件类命令会直接报错退出。
 
 ## 原理简述
 
 DSH 底层为 Linux 桌面设计，在 Android 上主要有六类水土不服：
 
-1. **文件系统**：f2fs + 加密分区禁 `link()` 系统调用，脚本用 preload 劫持 `fs.link` 在失败时 fallback 到 `rename`
-2. **沙箱**：官方 bwrap/Landlock 后端依赖 Linux 内核能力，Android 内核不提供，脚本用 proot 做路径级替代（`runnerCommand` 注入）
-3. **路径**：`/bin/bash`、`/tmp` 等 Linux 标准路径在 Termux 不存在，脚本统一改到 `$PREFIX` 真实路径；多用户或非默认安装位置下 `$PREFIX` 并不等于 `/data/data/com.termux/files/usr`，所以脚本先校验 `PREFIX` / `HOME` 再采用，校验不过才回退默认值
-4. **原生依赖**：sharp 在 android-arm64 没有官方预编译二进制，脚本改用同版本 WASM 版替代
-5. **浏览器认证**：`dsh web` 自动打开浏览器时，`SameSite=Strict` 的 cookie 不被外部应用导航携带，脚本改为 `Lax`
+1. **文件系统**：f2fs + 加密分区禁 `link()` 系统调用，脚本用 preload 劫持 `fs.link` 在失败时 fallback 到 `rename`。
+2. **沙箱**：官方 bwrap/Landlock 后端依赖 Linux 内核能力，Android 内核不提供，脚本用 proot 做路径级替代（`runnerCommand` 注入）。
+3. **路径**：`/bin/bash`、`/tmp` 等 Linux 标准路径在 Termux 不存在，脚本统一改到 `$PREFIX` 真实路径；多用户或非默认安装位置下 `$PREFIX` 并不等于 `/data/data/com.termux/files/usr`，所以脚本先校验 `PREFIX` / `HOME` 再采用，校验不过才回退默认值。
+4. **原生依赖**：sharp 在 android-arm64 没有官方预编译二进制，脚本改用同版本 WASM 版替代。
+5. **浏览器认证**：`dsh web` 自动打开浏览器时，`SameSite=Strict` 的 cookie 不被外部应用导航携带，脚本改为 `Lax`。
 6. **原生扩展**：dsh 部分能力依赖 Node 原生 addon，官方只发布桌面平台预编译产物。脚本按「能否本地编译」分两条路：
-    - **可编译的**（如 `node-addon-system` 的 `flock`，包内自带 `src/flock.c`）：用 `clang` 现场编译成 `system.node`，放入自建的 android-arm64 平台包并放开平台守卫——保留真原生语义，内核级文件锁可用
-    - **不可编译的**（如 `node-addon-require-builtin`，源码未公开）：用 `--expose-internals` + 纯 JS 实现替代（拿到的是同一批 Node 内部模块实例）
+    - **可编译的**（如 `node-addon-system` 的 `flock`，包内自带 `src/flock.c`）：用 `clang` 现场编译成 `system.node`，放入自建的 android-arm64 平台包并放开平台守卫——保留真原生语义，内核级文件锁可用。
+    - **不可编译的**（如 `node-addon-require-builtin`，源码未公开）：用 `--expose-internals` + 纯 JS 实现替代（拿到的是同一批 Node 内部模块实例）。
 
 ## 备份与还原
 
@@ -214,15 +214,16 @@ tar xzf dsh-home.tar.gz -C ~
 
 ## 关于本项目
 
-- 为了兼容 Android 系统，沙箱后端用 proot 是**路径级隔离**，不是真正的内核隔离，安全性低于官方 bwrap/Landlock
-- 适合在**自己的设备上跑可信任务**，不要用它执行来历不明的代码
-- 目前开发者仅在自己的设备上验证了可行性，如发现问题，可以向专业人士和人工智能求助，问题发现或解决后欢迎各位在 issue 中提出
-- 本人不是专业的开发者，有意要维护此补丁的，请通过 xingyunMC@outlook.com 和我联系
-- 本项目与 DeepSeek 官方无关，且不用于任何商业活动
+- 为了兼容 Android 系统，沙箱后端用 proot 是**路径级隔离**，不是真正的内核隔离，安全性低于官方 bwrap/Landlock。
+- 适合在**自己的设备上跑可信任务**，不要用它执行来历不明的代码。
+- 目前开发者仅在自己的设备上验证了可行性，如发现问题，可以向专业人士和人工智能求助，问题发现或解决后欢迎各位在 issue 中提出。
+- 本人不是专业的开发者，有意要维护此补丁的，请通过 xingyunMC@outlook.com 和我联系。
+- 本项目与 DeepSeek 官方无关，且不用于任何商业活动。
+- 除简体中文以外的 README 文件均使用了 AI 翻译，可能会出现表述不准确、含义不标准等问题，欢迎在 issue 中指出。
 
 ## License
 
 [MIT](./LICENSE)
 
 ## 备注
-此 README 文件由 DeepSeek 撰写
+此 README 文件由 DeepSeek 撰写。

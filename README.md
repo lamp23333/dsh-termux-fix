@@ -25,9 +25,9 @@ Deploying DeepSeek Harness with Termux on an Android device runs into a whole se
 
 ### Prerequisites
 
-- An Android phone + [Termux](https://termux.dev/)
-- More than 1.5 GB of free space on the device (`node-pty` and `flock` have to be built on the device)
-- If `pkg install` is slow or fails, you can switch to a closer mirror with `termux-change-repo`
+- An Android phone + [Termux](https://termux.dev/).
+- More than 1.5 GB of free space on the device (`node-pty` and `flock` have to be built on the device).
+- If `pkg install` is slow or fails, you can switch to a closer mirror with `termux-change-repo`.
 - The first installation requires network access (npm registry). If it is slow, you can point npm at a faster mirror with `npm config set registry <mirror-url>`, and check the result with `npm config get registry`.
 
 ### 1. Download and import the patch
@@ -46,23 +46,23 @@ curl -O https://raw.githubusercontent.com/lamp23333/dsh-termux-fix/main/apply-ds
 
 **Option 2**: Download manually and import into Termux
 
-1. Get the patch file by downloading the repository zip or `apply-dsh-patches.sh` to your phone's storage
-2. Grant storage access in Termux
+1. Get the patch file by downloading the repository zip or `apply-dsh-patches.sh` to your phone's storage.
+2. Grant storage access in Termux.
 ```bash
 termux-setup-storage
 ```
 (a permission dialog will pop up after running it; tap "Allow")
 
-3. Import the patch file into your home directory (`~`, or `/data/data/com.termux/files/home`)
+3. Import the patch file into your home directory (`~`, or `/data/data/com.termux/files/home`).
 
-- Copy a single file:
+- Copy a single file
 ```bash
 cp /storage/emulated/0/[folder containing the patch]/apply-dsh-patches.sh ~/
 ```
 
 or
 
-- Unzip the repository archive:
+- Unzip the repository archive
 ```bash
 cd ~
 unzip /storage/emulated/0/[folder containing the repository zip]/dsh-termux-fix-main.zip
@@ -81,7 +81,7 @@ cp ~/dsh-termux-fix-main/apply-dsh-patches.sh ~/
 > bash ~/apply-dsh-patches.sh all
 > ```
 
-> You can also do it in stages
+> You can also do it in stages.
 >
 > First install the system dependencies, the prerequisite patch and DeepSeek Harness:
 > ```bash
@@ -91,7 +91,7 @@ cp ~/dsh-termux-fix-main/apply-dsh-patches.sh ~/
 > ```bash
 > bash ~/apply-dsh-patches.sh status
 > ```
-> and confirm it says "stage 2/3"
+> and confirm it says "stage 2/3".
 >
 > Finally, apply the remaining patches:
 > ```bash
@@ -113,8 +113,8 @@ Updating works the same way as installing, but the patches have to be re-applied
 
 Packages that the patch installs via `pkg install`:
 ```
-Runtime: node nodejs bash proot sed grep tar gzip diffutils findutils coreutils
-Build time: clang make python pkg-config
+At runtime: node nodejs bash proot sed grep tar gzip diffutils findutils coreutils
+At build time: clang make python pkg-config
 ```
 
 ## Commands
@@ -156,28 +156,28 @@ With no arguments, it prints the usage instructions (`help`).
 
 ## Script features
 
-- **Idempotent**: re-running it is safe; already-applied patches are skipped automatically and nothing is changed twice
-- **Automatic backup**: package-level changes are automatically backed up as `.bak` and can be rolled back
-- **Survives code splitting**: package-level patches locate the target files by "code signature strings" instead of hard-coding `lib/index.js`. dsh splits its code into hash-named files such as `lib/runner-launch-<hash>.js` (the hash changes with every release), so hard-coded paths are bound to break
-- **No false alarms for missing packages**: when the corresponding package is not installed, it prints `[SKIP]` and does not count it as a failure
-- **Self-check**: when it finishes it prints an `[OK]/[FAIL]` list, and everything must pass for it to count as success (items whose dependencies are missing show `[SKIP]` and are not counted); sed-based changes are re-checked with grep, and anything unexpected is reported directly as `[FAIL]`
-- **Hands off sensitive data**: it never touches API keys, session history or credential files
-- **Locally compiled native extensions**: `flock` is built on the device in Termux with `clang` (it only needs `node_api.h` provided with the `nodejs` package); it does not depend on node-gyp and does not need to download prebuilt artifacts over the network
-- **Automatic path handling**: `PREFIX` / `HOME` are validated before being adopted (non-empty, absolute path, shaped like `.../com.termux/files/usr`, `$PREFIX/bin/bash` actually executable); if any check fails it falls back to the official default paths. The generated wrapper and `cordis.patch.yml` are also injected with the actual paths
-- **Diagnosable outside Termux**: when not run inside Termux, `help` / `status` / `doctor` / `channels` still work as usual, while file-writing commands error out and exit immediately
+- **Idempotent**: re-running it is safe; already-applied patches are skipped automatically and nothing is changed twice.
+- **Automatic backup**: package-level changes are automatically backed up as `.bak` and can be rolled back.
+- **Survives code splitting**: package-level patches locate the target files by "code signature strings" instead of hard-coding `lib/index.js`. dsh splits its code into hash-named files such as `lib/runner-launch-<hash>.js` (the hash changes with every release), so hard-coded paths are bound to break.
+- **No false alarms for missing packages**: when the corresponding package is not installed, it prints `[SKIP]` and does not count it as a failure.
+- **Self-check**: when it finishes it prints an `[OK]/[FAIL]` list, and everything must pass for it to count as success (items whose dependencies are missing show `[SKIP]` and are not counted); sed-based changes are re-checked with grep, and anything unexpected is reported directly as `[FAIL]`.
+- **Hands off sensitive data**: it never touches API keys, session history or credential files.
+- **Locally compiled native extensions**: `flock` is built on the device in Termux with `clang` (it only needs `node_api.h` provided with the `nodejs` package); it does not depend on node-gyp and does not need to download prebuilt artifacts over the network.
+- **Automatic path handling**: `PREFIX` / `HOME` are validated before being adopted (non-empty, absolute path, shaped like `.../com.termux/files/usr`, `$PREFIX/bin/bash` actually executable); if any check fails it falls back to the official default paths. The generated wrapper and `cordis.patch.yml` are also injected with the actual paths.
+- **Diagnosable outside Termux**: when not run inside Termux, `help` / `status` / `doctor` / `channels` still work as usual, while file-writing commands error out and exit immediately.
 
-## How it works, in brief
+## How it works
 
 DSH is designed at its core for Linux desktops, and on Android it is mainly incompatible in six respects:
 
-1. **File system**: f2fs on encrypted partitions forbids the `link()` system call; the script uses a preload to hijack `fs.link` and fall back to `rename` on failure
-2. **Sandbox**: the official bwrap/Landlock backends depend on Linux kernel capabilities that the Android kernel does not provide; the script uses proot as a path-level substitute (injected via `runnerCommand`)
-3. **Paths**: standard Linux paths such as `/bin/bash` and `/tmp` do not exist in Termux, so the script rewrites them all to the real paths under `$PREFIX`; under multi-user setups or non-default install locations `$PREFIX` is not equal to `/data/data/com.termux/files/usr`, so the script validates `PREFIX` / `HOME` before adopting them and only falls back to the default values if validation fails
-4. **Native dependencies**: sharp has no official prebuilt binary for android-arm64, so the script substitutes the WASM build of the same version
-5. **Browser authentication**: when `dsh web` auto-opens the browser, cookies with `SameSite=Strict` are not carried along by navigation from an external app, so the script changes it to `Lax`
+1. **File system**: f2fs on encrypted partitions forbids the `link()` system call; the script uses a preload to hijack `fs.link` and fall back to `rename` on failure.
+2. **Sandbox**: the official bwrap/Landlock backends depend on Linux kernel capabilities that the Android kernel does not provide; the script uses proot as a path-level substitute (injected via `runnerCommand`).
+3. **Paths**: standard Linux paths such as `/bin/bash` and `/tmp` do not exist in Termux, so the script rewrites them all to the real paths under `$PREFIX`; under multi-user setups or non-default install locations `$PREFIX` is not equal to `/data/data/com.termux/files/usr`, so the script validates `PREFIX` / `HOME` before adopting them and only falls back to the default values if validation fails.
+4. **Native dependencies**: sharp has no official prebuilt binary for android-arm64, so the script substitutes the WASM build of the same version.
+5. **Browser authentication**: when `dsh web` auto-opens the browser, cookies with `SameSite=Strict` are not carried along by navigation from an external app, so the script changes it to `Lax`.
 6. **Native extensions**: some dsh capabilities depend on Node native addons, and the official project only publishes prebuilt artifacts for desktop platforms. The script takes two routes depending on "whether it can be compiled locally":
-    - **Compilable ones** (such as `flock` in `node-addon-system`, whose package ships its own `src/flock.c`): build it locally with `clang` into `system.node`, put it into a self-built android-arm64 platform package and bypass the platform check — genuine native semantics are preserved and kernel-level file locking is available
-    - **Non-compilable ones** (such as `node-addon-require-builtin`, whose source code is not public): replace it with `--expose-internals` + a pure JS implementation (you get instances of the same Node internal modules)
+    - **Compilable ones** (such as `flock` in `node-addon-system`, whose package ships its own `src/flock.c`): build it locally with `clang` into `system.node`, put it into a self-built android-arm64 platform package and bypass the platform check — genuine native semantics are preserved and kernel-level file locking is available.
+    - **Non-compilable ones** (such as `node-addon-require-builtin`, whose source code is not public): replace it with `--expose-internals` + a pure JS implementation (you get instances of the same Node internal modules).
 
 ## Backup and restore
 
@@ -214,15 +214,16 @@ tar xzf dsh-home.tar.gz -C ~
 
 ## About this project
 
-- To stay compatible with Android, the sandbox backend uses proot for **path-level isolation**, which is not real kernel isolation and is less secure than the official bwrap/Landlock
-- It is suitable for **running trusted tasks on your own device**; do not use it to execute code of unknown origin
-- So far the developer has only verified feasibility on their own device. If you run into problems, you can turn to professionals and AI for help, and once a problem is found or solved, you are welcome to raise it in an issue
-- I am not a professional developer; if you intend to maintain this patch, please contact me at xingyunMC@outlook.com
-- This project is not affiliated with DeepSeek, and is not intended for commercial use
+- To stay compatible with Android, the sandbox backend uses proot for **path-level isolation**, which is not real kernel isolation and is less secure than the official bwrap/Landlock.
+- It is suitable for **running trusted tasks on your own device**; do not use it to execute code of unknown origin.
+- So far the developer has only verified feasibility on their own device. If you run into problems, you can turn to professionals and AI for help, and once a problem is found or solved, you are welcome to raise it in an issue.
+- I am not a professional developer; if you intend to maintain this patch, please contact me at xingyunMC@outlook.com.
+- This project is not affiliated with DeepSeek, and is not intended for commercial use.
+- All README files other than the Simplified Chinese one were translated by AI, so the wording may be imprecise and some terms may be non-standard. If you notice anything, please point it out in an issue.
 
 ## License
 
 [MIT](./LICENSE)
 
 ## Remarks
-This README file was written by DeepSeek
+This README file was written by DeepSeek.
