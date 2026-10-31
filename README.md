@@ -2,7 +2,7 @@
 
 [![License ](https://img.shields.io/badge/License-MIT-A31F34?style=flat)](./LICENSE)
 [![dsh](https://img.shields.io/badge/Made_by-dsh-4D6BFE?style=flat&logo=deepseek&logoColor=white)](https://www.deepseek.com/harness/)
-[![Website](https://img.shields.io/badge/Website-555555?style=flat)](https://lamp23333.github.io/dshtermux)
+[![Website](https://img.shields.io/badge/Official _Website-555555?style=flat)](https://lamp23333.github.io/dshtermux)
 
 **一键补丁脚本**，让 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 在 Android Termux 环境正常运行。
 
