@@ -15,7 +15,7 @@
 > [!NOTE]
 > This project only provides scripts that run on Termux; it is not a DeepSeek Harness plugin.
 
-`If you like this project, a Star would be appreciated`
+`If you like this project, a star would be appreciated! `
 
 ## Why it is needed
 
