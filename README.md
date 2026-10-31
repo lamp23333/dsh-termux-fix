@@ -1,6 +1,6 @@
 # dsh-termux-fix
 
-[![dsh](https://img.shields.io/badge/Powered%20by-DeepSeek%20Harness-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://www.deepseek.com/harness/)
+[![dsh](https://img.shields.io/badge/Made_by-DeepSeek_Harness-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://www.deepseek.com/harness/)
 
 **一键补丁脚本**，让 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 在 Android Termux 环境正常运行。
 
