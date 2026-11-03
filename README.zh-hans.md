@@ -153,7 +153,7 @@ dsh web
 | 14 | `dsh-attachment-local`（动态定位） | 附件目录 fsync 越权，一贴图就报 `prompt rejected (session/agent-busy)` |
 | 15 | `dsh-attachment-local`（动态定位） | Android 的 f2fs 不允许硬链接，保存附件时 `link()` 报 `EACCES`，一贴图就报 `Unable to persist attachment.` |
 
-- 第 3、8、9、11、12、13、14 项为 DeepSeek Harness 安装后补丁，安装时会改到已有文件，首次执行把原件备份成 `.bak`。
+- 第 3、8、9、11、12、13、14、15 项为 DeepSeek Harness 安装后补丁，安装时会改到已有文件，首次执行把原件备份成 `.bak`。
 
 ## 脚本特性
 
