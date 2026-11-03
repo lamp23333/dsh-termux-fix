@@ -26,7 +26,7 @@
 ### 前置條件
 
 - Android 手機 + [Termux](https://termux.dev/)。
-- 裝置可用空間需大於 1.5 GB（`node-pty` 與 `flock` 需在本機編譯）。
+- 裝置可用空間建議預留 1.5 GB 以上（`node-pty` 與 `flock` 需在本機編譯；空間不足僅會警告，不會中止）。
 - 若 `pkg install` 緩慢或失敗，可使用 `termux-change-repo` 更換為較近的鏡像站。
 - 首次安裝需連上網路（npm registry）。若下載緩慢，可用 `npm config set registry <鏡像網址>` 指定較快的鏡像站，再以 `npm config get registry` 確認是否設定成功。
 
@@ -114,7 +114,7 @@ dsh web
 修補程式會透過 `pkg install` 安裝的套件：
 ```
 執行時：node nodejs bash proot sed grep tar gzip diffutils findutils coreutils
-編譯時：clang make python pkg-config
+編譯時：clang make python pkg-config（缺少 `ld` 時另會補裝 binutils）
 ```
 
 ## 指令
@@ -151,8 +151,9 @@ dsh web
 | 12 | `node-addon-require-builtin`（JS 備援方案） | 官方未提供 android-arm64 原生建置產物，dsh 啟動報 `No usable native binding found` |
 | 13 | `@deepseek-ai/node-addon-system`（本機編譯） | `flock` 無 android-arm64 預先編譯的產物，Agent 每一輪都會回報 `flock is not supported on android-arm64` |
 | 14 | `dsh-attachment-local`（動態定位） | 附件目錄的 fsync 超出權限範圍，一貼圖就會出現 `prompt rejected (session/agent-busy)` |
+| 15 | `dsh-attachment-local`（動態定位） | Android 的 f2fs 不允許硬連結，儲存附件時 `link()` 回報 `EACCES`，一貼圖就出現 `Unable to persist attachment.` |
 
-- 第 3、8、9、11、12、13、14 項為 DeepSeek Harness 安裝後修補程式，安裝時會修改既有檔案，首次執行把原件備份成 `.bak`。
+- 第 3、8、9、11、12、13、14、15 項為 DeepSeek Harness 安裝後修補程式，安裝時會修改既有檔案，首次執行把原件備份成 `.bak`。
 
 ## 腳本特性
 
@@ -170,7 +171,7 @@ dsh web
 
 DSH 底層為 Linux 桌面設計，在 Android 上主要有六類水土不服：
 
-1. **檔案系統**：f2fs + 加密分區禁用 `link()` 系統呼叫，腳本用 preload 攔截 `fs.link`，失敗時退回 `rename`。
+1. **檔案系統**：Android 的 f2fs 會拒絕 `link()`（回傳 `EACCES`），而儲存附件的主要路徑正是「暫存檔案 --link--> 正式檔案」。腳本分兩層處理：以 preload 攔截 `fs.link` / `fs.promises.link`，為 CJS 呼叫點提供備援（失敗時退回 `rename`）；對 `dsh-attachment-local` 則直接把兩處 `link()` 換成 `linkOrCopy()`，硬連結失敗時改用 `copyFile` 複製（第 15 項）——ESM 的 `import { link }` 取得的是內建模組的原函式，preload 攔截不到。
 2. **沙箱**：官方 bwrap/Landlock 後端依賴 Linux 核心能力，Android 核心不提供，腳本用 proot 做路徑級替代（`runnerCommand` 注入）。
 3. **路徑**：`/bin/bash`、`/tmp` 等 Linux 標準路徑在 Termux 不存在，腳本統一改到 `$PREFIX` 真實路徑；多使用者或非預設安裝位置下 `$PREFIX` 並不等於 `/data/data/com.termux/files/usr`，所以腳本先驗證 `PREFIX` / `HOME` 再採用，驗證不過才回退預設值。
 4. **原生依賴**：sharp 在 android-arm64 沒有官方預編譯二進位檔，腳本改用同版本的 WASM 版本代替。
@@ -209,7 +210,8 @@ tar xzf dsh-home.tar.gz -C ~
 | 卡在 `npm install` | 查看 `~/dsh-install-logs/install-*.log`；若下載緩慢，建議改用較快的鏡像站 |
 | `status` 一直是階段 2 | 查看 `[3]` 中哪幾項為 MISS，單獨重新執行 `patch`，並閱讀 `[FAIL]` 說明 |
 | 終端機面板壞了 | `node-pty` 未編譯成功，`pkg install clang make python` 後重新執行 `patch` |
-| 貼上圖片後無法送出 | 第 14 項未生效，檢查 `dsh-attachment-local/lib/index.js` 裡是否有 `dsh-android-sync-guard` |
+| 貼圖後出現 `prompt rejected (session/agent-busy)` | 第 14 項未生效，檢查 `dsh-attachment-local/lib/index.js` 裡是否有 `dsh-android-sync-guard` |
+| 貼圖後出現 `Unable to persist attachment.` | 第 15 項未生效，檢查同一檔案裡是否有 `dsh-android-link-guard` |
 | 報「找不到 Termux 執行環境」 | 你在 Termux 以外的環境執行了寫入檔案類指令；`status` / `help` 仍然可用 |
 
 ## 關於本專案
