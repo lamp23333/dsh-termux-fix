@@ -26,7 +26,7 @@ Deploying DeepSeek Harness with Termux on an Android device runs into a whole se
 ### Prerequisites
 
 - An Android phone + [Termux](https://termux.dev/).
-- More than 1.5 GB of free space on the device (`node-pty` and `flock` have to be built on the device).
+- 1.5 GB or more of free space is recommended on the device (`node-pty` and `flock` have to be built on the device; if space runs short it only warns, it does not abort).
 - If `pkg install` is slow or fails, you can switch to a closer mirror with `termux-change-repo`.
 - The first installation requires network access (npm registry). If it is slow, you can point npm at a faster mirror with `npm config set registry <mirror-url>`, and check the result with `npm config get registry`.
 
@@ -114,7 +114,7 @@ Updating works the same way as installing, but the patches have to be re-applied
 Packages that the patch installs via `pkg install`:
 ```
 At runtime: node nodejs bash proot sed grep tar gzip diffutils findutils coreutils
-At build time: clang make python pkg-config
+At build time: clang make python pkg-config (adds binutils automatically if `ld` is missing)
 ```
 
 ## Commands
@@ -151,8 +151,9 @@ With no arguments, it prints the usage instructions (`help`).
 | 12 | `node-addon-require-builtin` (JS fallback) | There is no official android-arm64 native artifact, so dsh fails at startup with `No usable native binding found` |
 | 13 | `@deepseek-ai/node-addon-system` (compiled locally) | `flock` has no prebuilt android-arm64 artifact, so every agent turn fails with `flock is not supported on android-arm64` |
 | 14 | `dsh-attachment-local` (located dynamically) | The fsync on the attachment directory goes beyond the permitted scope, so pasting an image immediately fails with `prompt rejected (session/agent-busy)` |
+| 15 | `dsh-attachment-local` (located dynamically) | Android's f2fs does not allow hard links, so saving an attachment fails with `EACCES` from `link()` and pasting an image reports `Unable to persist attachment.` |
 
-- Items 3, 8, 9, 11, 12, 13 and 14 are post-install patches for DeepSeek Harness. They modify existing files during installation, and the first run backs up the originals as `.bak`.
+- Items 3, 8, 9, 11, 12, 13, 14 and 15 are post-install patches for DeepSeek Harness. They modify existing files during installation, and the first run backs up the originals as `.bak`.
 
 ## Script features
 
@@ -170,7 +171,7 @@ With no arguments, it prints the usage instructions (`help`).
 
 DSH is designed at its core for Linux desktops, and on Android it is mainly incompatible in six respects:
 
-1. **File system**: f2fs on encrypted partitions forbids the `link()` system call; the script uses a preload to hijack `fs.link` and fall back to `rename` on failure.
+1. **File system**: Android's f2fs rejects `link()` (returning `EACCES`), and the main path for saving attachments is exactly "staging file --link--> final file". The script handles this in two layers: a preload intercepts `fs.link` / `fs.promises.link` as a fallback for CommonJS call sites (falling back to `rename` on failure); for `dsh-attachment-local` it replaces both `link()` calls with `linkOrCopy()`, which copies with `copyFile` when a hard link fails (item 15) — the ESM `import { link }` gets the original function from the built-in module, which the preload cannot intercept.
 2. **Sandbox**: the official bwrap/Landlock backends depend on Linux kernel capabilities that the Android kernel does not provide; the script uses proot as a path-level substitute (injected via `runnerCommand`).
 3. **Paths**: standard Linux paths such as `/bin/bash` and `/tmp` do not exist in Termux, so the script rewrites them all to the real paths under `$PREFIX`; under multi-user setups or non-default install locations `$PREFIX` is not equal to `/data/data/com.termux/files/usr`, so the script validates `PREFIX` / `HOME` before adopting them and only falls back to the default values if validation fails.
 4. **Native dependencies**: sharp has no official prebuilt binary for android-arm64, so the script substitutes the WASM build of the same version.
@@ -209,7 +210,8 @@ tar xzf dsh-home.tar.gz -C ~
 | It hangs at `npm install` | Check `~/dsh-install-logs/install-*.log`; if downloads are slow, point npm at a faster mirror |
 | `status` stays at stage 2 | Look at which items in `[3]` are MISS, re-run `patch` on its own and read the `[FAIL]` explanation |
 | The terminal panel is broken | `node-pty` was not compiled successfully; run `pkg install clang make python` and then re-run `patch` |
-| Images cannot be sent when pasted | Item 14 did not take effect; check whether `dsh-attachment-local/lib/index.js` contains `dsh-android-sync-guard` |
+| Pasting an image fails with `prompt rejected (session/agent-busy)` | Item 14 did not take effect; check whether `dsh-attachment-local/lib/index.js` contains `dsh-android-sync-guard` |
+| Pasting an image fails with `Unable to persist attachment.` | Item 15 did not take effect; check whether the same file contains `dsh-android-link-guard` |
 | It reports "Termux runtime environment not found" | You ran a file-writing command outside Termux; `status` / `help` still work |
 
 ## About this project
