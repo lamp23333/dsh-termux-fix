@@ -27,7 +27,7 @@ Android 端末で Termux を使って DeepSeek Harness をデプロイすると�
 ### 前提条件
 
 - Android 端末 + [Termux](https://termux.dev/)
-- 端末の空き容量が 1.5 GB 以上あること（`node-pty` と `flock` はその場でコンパイルします）。
+- 端末の空き容量は 1.5 GB 以上を確保することを推奨します（`node-pty` と `flock` はその場でコンパイルします。不足している場合は警告のみで、中止はしません）。
 - `pkg install` が遅い、または失敗する場合は、`termux-change-repo` でより近いミラーに切り替えられます。
 - 初回インストールにはネットワーク接続（npm registry）が必要です。ダウンロードが遅い場合は `npm config set registry <ミラーURL>` でより速いミラーに切り替えることができます。設定が反映されたかは `npm config get registry` で確認できます。
 
@@ -115,7 +115,7 @@ dsh web
 パッチが `pkg install` でインストールするパッケージ：
 ```
 実行時：node nodejs bash proot sed grep tar gzip diffutils findutils coreutils
-ビルド時：clang make python pkg-config
+ビルド時：clang make python pkg-config（`ld` がない場合は binutils も自動で追加します）
 ```
 
 ## コマンド
@@ -152,11 +152,12 @@ dsh web
 | 12 | `node-addon-require-builtin`（JS フォールバック） | 公式に android-arm64 のネイティブ成果物がなく、dsh の起動時に `No usable native binding found` が出る |
 | 13 | `@deepseek-ai/node-addon-system`（ローカルコンパイル） | `flock` に android-arm64 のプリビルド成果物がなく、Agent がターンごとに `flock is not supported on android-arm64` を報告する |
 | 14 | `dsh-attachment-local`（動的検出） | 添付ディレクトリの fsync が権限の範囲を超えてしまい、画像を貼っただけで `prompt rejected (session/agent-busy)` が出る |
+| 15 | `dsh-attachment-local`（動的検出） | Android の f2fs はハードリンクを許可しないため、添付の保存時に `link()` が `EACCES` になり、画像を貼ると `Unable to persist attachment.` が出る |
 
-- 3、8、9、11、12、13、14 番目の項目は、DeepSeek Harness インストール後に適用するパッチです。インストール時に既存のファイルを変更するため、初回実行時に元のファイルを `.bak` としてバックアップします。
+- 3、8、9、11、12、13、14、15 番目の項目は、DeepSeek Harness インストール後に適用するパッチです。インストール時に既存のファイルを変更するため、初回実行時に元のファイルを `.bak` としてバックアップします。
 
 ## スクリプトの特長
-。
+
 - **冪等**：何度でも実行でき、適用済みのパッチは自動でスキップされ、二重に変更されることはありません。
 - **自動バックアップ**：パッケージレベルの変更は自動で `.bak` としてバックアップされ、ロールバックできます。
 - **パッケージ分割耐性**：パッケージレベルのパッチは「コードの特徴的な文字列」で対象ファイルを特定し、`lib/index.js` を決め打ちしません。dsh はコードを `lib/runner-launch-<hash>.js` のようなハッシュ名のファイルに分割します（hash はリリースごとに変わります）ため、パスの決め打ちは必ず失敗します。
@@ -171,7 +172,7 @@ dsh web
 
 DSH は基本的に Linux デスクトップ向けに設計されており、Android 上では主に 6 種類の不適合があります：
 
-1. **ファイルシステム**：f2fs + 暗号化パーティションは `link()` システムコールを禁止しているため、スクリプトは preload で `fs.link` をフックし、失敗時に `rename` へフォールバックします。
+1. **ファイルシステム**：Android の f2fs は `link()` を拒否します（`EACCES` を返します）。しかも添付を保存する主要な経路は、まさに「一時ファイル --link--> 正式なファイル」です。スクリプトは二段構えで対処します。preload で `fs.link` / `fs.promises.link` をフックし、CommonJS 側の呼び出しにフォールバック（失敗時は `rename`）を用意する。加えて `dsh-attachment-local` では 2 か所の `link()` を `linkOrCopy()` に置き換え、ハードリンクに失敗したら `copyFile` でコピーします（15 番目の項目）——ESM の `import { link }` は組み込みモジュールの元の関数を取得するため、preload ではフックできません。
 2. **サンドボックス**：公式の bwrap/Landlock バックエンドは Linux カーネルの機能に依存していますが、Android カーネルはそれを提供しません。スクリプトは proot でパスレベルの代替を行います（`runnerCommand` インジェクション）。
 3. **パス**：`/bin/bash` や `/tmp` などの Linux 標準パスは Termux には存在しないため、スクリプトは一律に `$PREFIX` 下の実際のパスに変更します。マルチユーザー環境やデフォルト以外のインストール位置では `$PREFIX` は `/data/data/com.termux/files/usr` と等しくないため、スクリプトは `PREFIX` / `HOME` を検証してから採用し、検証に通らない場合のみデフォルト値にフォールバックします。
 4. **ネイティブ依存**：sharp には android-arm64 向けの公式プリビルドバイナリがないため、スクリプトは同バージョンの WASM 版で代替します。
@@ -210,7 +211,8 @@ tar xzf dsh-home.tar.gz -C ~
 | `npm install` で止まる | `~/dsh-install-logs/install-*.log` を確認してください。ダウンロードが遅い場合は、より速いミラーに切り替えてください |
 | `status` がずっとステージ 2 のまま | `[3]` の中でどの項目が MISS かを確認し、`patch` を単独で再実行して `[FAIL]` の説明を読んでください |
 | ターミナルパネルが壊れた | `node-pty` のコンパイルに失敗しています。`pkg install clang make python` を実行してから `patch` を再実行してください |
-| 画像を貼っても送信できない | 14 番目の項目が効いていません。`dsh-attachment-local/lib/index.js` に `dsh-android-sync-guard` があるか確認してください |
+| 画像を貼ると `prompt rejected (session/agent-busy)` が出る | 14 番目の項目が効いていません。`dsh-attachment-local/lib/index.js` に `dsh-android-sync-guard` があるか確認してください |
+| 画像を貼ると `Unable to persist attachment.` が出る | 15 番目の項目が効いていません。同じファイルに `dsh-android-link-guard` があるか確認してください |
 | 「Termux 実行環境が見つかりません」と出る | Termux 以外の場所でファイル書き込み系のコマンドを実行しています。`status` / `help` は引き続き使用できます |
 
 ## 本プロジェクトについて
