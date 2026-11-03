@@ -26,7 +26,7 @@
 ### 前置条件
 
 - Android 手机 + [Termux](https://termux.dev/)。
-- 设备可用空间需大于 1.5 GB（`node-pty` 与 `flock` 要现场编译）。
+- 设备可用空间建议预留 1.5 GB 以上（`node-pty` 与 `flock` 要现场编译；空间不足只警告，不会中止）。
 - 可能需要使用 `termux-change-repo` 更换国内源。
 - 首次安装需联网（npm registry），可能需要使用 `npm config set registry https://registry.npmmirror.com` 更换 npm 国内源，可以使用 `npm config get registry` 验证是否更改成功。
 
@@ -114,7 +114,7 @@ dsh web
 补丁中使用 pkg install 安装的包：
 ```
 运行期：node nodejs bash proot sed grep tar gzip diffutils findutils coreutils
-编译期：clang make python pkg-config
+编译期：clang make python pkg-config（缺 `ld` 时另会补装 binutils）
 ```
 
 ## 命令
@@ -151,6 +151,7 @@ dsh web
 | 12 | `node-addon-require-builtin`（JS 兜底） | 官方无 android-arm64 原生产物，dsh 启动报 `No usable native binding found` |
 | 13 | `@deepseek-ai/node-addon-system`（本地编译） | `flock` 无 android-arm64 预编译产物，Agent 每轮运行报 `flock is not supported on android-arm64` |
 | 14 | `dsh-attachment-local`（动态定位） | 附件目录 fsync 越权，一贴图就报 `prompt rejected (session/agent-busy)` |
+| 15 | `dsh-attachment-local`（动态定位） | Android 的 f2fs 不允许硬链接，保存附件时 `link()` 报 `EACCES`，一贴图就报 `Unable to persist attachment.` |
 
 - 第 3、8、9、11、12、13、14 项为 DeepSeek Harness 安装后补丁，安装时会改到已有文件，首次执行把原件备份成 `.bak`。
 
@@ -170,7 +171,7 @@ dsh web
 
 DSH 底层为 Linux 桌面设计，在 Android 上主要有六类水土不服：
 
-1. **文件系统**：f2fs + 加密分区禁 `link()` 系统调用，脚本用 preload 劫持 `fs.link` 在失败时 fallback 到 `rename`。
+1. **文件系统**：Android 的 f2fs 拒绝 `link()`（返回 `EACCES`），而保存附件的主路径正是「临时文件 --link--> 正式文件」。脚本分两层处理：preload 劫持 `fs.link` / `fs.promises.link` 给 CJS 调用点兜底（失败时退化为 `rename`）；对 `dsh-attachment-local` 则直接把两处 `link()` 换成 `linkOrCopy()`，硬链接失败时用 `copyFile` 复制（补丁 15）——ESM 的 `import { link }` 拿的是内置模块原函数，preload 改不到它。
 2. **沙箱**：官方 bwrap/Landlock 后端依赖 Linux 内核能力，Android 内核不提供，脚本用 proot 做路径级替代（`runnerCommand` 注入）。
 3. **路径**：`/bin/bash`、`/tmp` 等 Linux 标准路径在 Termux 不存在，脚本统一改到 `$PREFIX` 真实路径；多用户或非默认安装位置下 `$PREFIX` 并不等于 `/data/data/com.termux/files/usr`，所以脚本先校验 `PREFIX` / `HOME` 再采用，校验不过才回退默认值。
 4. **原生依赖**：sharp 在 android-arm64 没有官方预编译二进制，脚本改用同版本 WASM 版替代。
@@ -209,7 +210,8 @@ tar xzf dsh-home.tar.gz -C ~
 | 卡在 `npm install` | 看 `~/dsh-install-logs/install-*.log`；国内建议 `registry=https://registry.npmmirror.com` |
 | `status` 一直是阶段 2 | 看 `[3]` 里哪几项 MISS，单独重跑 `patch` 并读 `[FAIL]` 说明 |
 | 终端面板坏了 | `node-pty` 没编译成功，`pkg install clang make python` 后重跑 `patch` |
-| 贴图发不出去 | 第 14 项没生效，检查 `dsh-attachment-local/lib/index.js` 里是否有 `dsh-android-sync-guard` |
+| 贴图报 `prompt rejected (session/agent-busy)` | 第 14 项没生效，检查 `dsh-attachment-local/lib/index.js` 里是否有 `dsh-android-sync-guard` |
+| 贴图报 `Unable to persist attachment.` | 第 15 项没生效，检查同一文件里是否有 `dsh-android-link-guard` |
 | 报「找不到 Termux 运行环境」 | 你在非 Termux 里跑了写文件类命令；`status` / `help` 仍然可用 |
 
 ## 关于本项目
