@@ -55,14 +55,14 @@ termux-setup-storage
 
 3. 导入补丁文件到 Home 目录（也就是 `~` ，即 `/data/data/com.termux/files/home` ）。
 
-- 复制单文件导入
+- 复制单文件导入：
 ```bash
 cp /storage/emulated/0/[补丁所在文件夹]/apply-dsh-patches.sh ~/
 ```
 
 或者
 
-- 解压仓库zip包导入
+- 解压仓库zip包导入：
 ```bash
 cd ~
 unzip /storage/emulated/0/[仓库zip包所在文件夹]/dsh-termux-fix-main.zip
@@ -117,6 +117,82 @@ dsh web
 编译期：clang make python pkg-config（缺 `ld` 时另会补装 binutils）
 ```
 
+## 备份与还原
+
+> [!IMPORTANT]
+> 本节讲述的是**全量数据备份**；打补丁产生的快照备份另存于 `~/dsh-patch-backups/` 文件夹中，用 `restore` 命令回滚。
+
+> 以下为简易备份流程，详细备份用法请见 `help` 或 `backup --list`
+
+### 1. 备份
+
+```bash
+bash ~/apply-dsh-patches.sh backup --all
+```
+
+产物在 `~/dsh-backups/[YYYYmmdd-HHMMSS]/` 文件夹中，包含如下文件：
+```
+sessions.tar.gz    # 会话与附件
+settings.tar.gz    # 设置与身份（含 .credentials.yaml）
+patches.tar.gz     # 补丁产物
+workspace.tar.gz   # 工作区
+plugins.tar.gz     # 插件依赖与插件状态
+MANIFEST.txt       # 时间、版本、数据根、范围、还原方式
+```
+
+### 2. 还原
+
+- 单文件还原：
+```bash
+tar -xzf ~/dsh-backups/[YYYYmmdd-HHMMSS]/<name>.tar.gz -C /
+```
+
+- 全部还原：
+```bash
+for f in ~/dsh-backups/[YYYYmmdd-HHMMSS]/*.tar.gz; do tar -xzf "$f" -C /; done
+```
+
+尖括号中为自填内容。
+
+> [!WARNING]
+> `settings.tar.gz` 含登录凭据等隐私信息，不要传播给他人！
+
+## 卸载
+
+> 以下为简易卸载流程，详细卸载用法请见 `help` 或 `uninstall --list`
+
+### 1. 卸载前确认删除范围，不执行
+
+```bash
+bash ~/apply-dsh-patches.sh uninstall
+```
+
+### 2. 执行卸载
+
+按范围列表中的编号选择卸载范围。
+
+- 可单选编号：
+```bash
+bash ~/apply-dsh-patches.sh uninstall 2
+```
+
+- 也可以多选编号：
+```bash
+bash ~/apply-dsh-patches.sh uninstall 1 3
+```
+
+- 或者抹除 DSH 及补丁的全部数据：
+```bash
+bash ~/apply-dsh-patches.sh uninstall --all
+```
+
+> [!WARNING]
+> 数据无价，卸载请谨慎操作！
+
+### 备注
+
+卸载程序不会动：`node` / `npm` / `pnpm` 等 pkg 依赖、npm 缓存（`~/.npm/_cacache`、`~/.local/share/pnpm/store`）、`~/.agents`、`~/node_modules`、`~/workspace`、`~/package.json`，以及备份与缓存目录（`~/dsh-backups`、`~/dsh-patch-backups`、`~/sharp-wasm`、`~/dsh-install-logs`）。有删除需求请自行删除。
+
 ## 命令
 
 不带参数 = 打印使用说明（`help`）。
@@ -129,7 +205,8 @@ dsh web
 | `install` | 仅安装 DeepSeek Harness |
 | `all` | 安装 DeepSeek Harness 与补丁 |
 | `channels` | 查询 DeepSeek Harness 最新版本 |
-| `backup` | 备份数据（会话、配置、补丁产物、工作区） |
+| `backup` | 备份数据 |
+| `restore` | 回滚到某个补丁快照 |
 | `uninstall` | 卸载 DeepSeek Harness 与补丁 |
 | `help` | 显示使用说明 |
 
@@ -143,7 +220,7 @@ dsh web
 | 4 | `~/dsh-link-fix.js` | f2fs 文件系统禁硬链接，会话保存报 `EACCES` |
 | 5 | `~/bin/dsh` | HMR 插件崩溃（需 `--expose-internals`）+ 权限模式（`DSH_PERMISSION_MODE`，默认 `danger-full-access`） |
 | 6 | `~/bin/bwrap-proot` | 沙箱后端缺失（bwrap 不可用，转 proot） |
-| 7 | `~/.dsh/profiles/web/cordis.patch.yml` | 沙箱 runnerCommand 注入 |
+| 7 | `~/.dsh/profiles/web/cordis.patch.yml`（数据根，遵循 `$DSH_HOME`） | 沙箱 runnerCommand 注入 |
 | 8 | `dsh-subprocess-local`（动态定位） | 终端检查崩溃（平台检测拒绝 Android） |
 | 9 | `dsh-terminal-bash`（动态定位） | PTY 启动失败（shellPath 默认 `/bin/bash`） |
 | 10 | `node_modules/@img/sharp-wasm32` | sharp 无 android-arm64 原生二进制，启动报加载失败（attachment-local） |
@@ -153,25 +230,29 @@ dsh web
 | 14 | `dsh-attachment-local`（动态定位） | 附件目录 fsync 越权，一贴图就报 `prompt rejected (session/agent-busy)` |
 | 15 | `dsh-attachment-local`（动态定位） | Android 的 f2fs 不允许硬链接，保存附件时 `link()` 报 `EACCES`，一贴图就报 `Unable to persist attachment.` |
 
-- 第 3、8、9、11、12、13、14、15 项为 DeepSeek Harness 安装后补丁，安装时会改到已有文件，首次执行把原件备份成 `.bak`。
+- 第 1、2 项是安装 DeepSeek Harness 前补丁。`install` 的环境准备阶段就会写 `~/.gyp/include.gypi` 与 `~/.npmrc`，否则 `node-pty` 编不过、npm 也拉不动包。
+- 第 3~15 项是安装 DeepSeek Harness 后补丁。其中第 3、8、9、11、12、13、14、15 项是对已有文件的修改补丁。
+- 改动前的原件集中备份到 `~/dsh-patch-backups/[YYYYmmdd-HHMMSS]/`（`lib/` 对应 dsh 包内、`home/` 对应 Home 目录、`abs/` 对应其它绝对路径），同一份快照内同一文件只留最早一份，快照里附 `MANIFEST.txt`（时间、dsh 版本、来源路径、大小、sha256）。
 
 ## 脚本特性
 
 - **幂等**：可重复运行，已打补丁自动跳过，不会重复改。
-- **自动备份**：包级修改自动备份 `.bak`，可回滚。
+- **自动备份**：打补丁前把原件集中备份到 `~/dsh-patch-backups/[YYYYmmdd-HHMMSS]/`，同一份快照内同一文件只留最早一份；`restore [YYYYmmdd-HHMMSS]` 整份回滚，加 `--only=[文本]` 只回滚相对路径包含该文本的文件（例：`--only=index.js`），回滚前还会先把当前文件另存一份（可再回滚）。没改动任何文件时不会留下空快照。
 - **抗拆包**：包级补丁按「代码特征字符串」定位目标文件，不写死 `lib/index.js`。dsh 会把代码拆进 `lib/runner-launch-<hash>.js` 这类哈希命名文件（hash 每次发版都变），写死路径必然失效。
 - **包缺失不误报**：对应包未安装时输出 `[SKIP]`，不计入失败项。
 - **自检**：跑完输出 `[OK]/[FAIL]` 清单，所有项全部通过才算成功（依赖缺失的项显示 `[SKIP]` 且不计入）；sed 类修改会再 grep 复核，不符预期直接报 `[FAIL]`。
-- **无敏感信息**：不碰 API Key、会话历史、凭据文件。
+- **安装过程不碰敏感信息**：安装与打补丁都不会更改 API Key、会话历史和凭据文件。而备份与卸载是例外：使用备份命令 `backup 2` 会把 `.credentials.yaml` 打进 `settings.tar.gz`，使用卸载命令 `uninstall 5` 会删掉 `.credentials.yaml`，使用卸载命令 `uninstall 7` 会删掉 `sessions` / `attachments` / `storages`。
 - **本地编译原生扩展**：`flock` 在 Termux 现场用 `clang` 编译（只需随 `nodejs` 包提供的 `node_api.h`），不依赖 node-gyp，也不需要联网下载预编译产物。
 - **路径自适应**：`PREFIX` / `HOME` 先校验再采用（非空、绝对路径、形如 `.../com.termux/files/usr`、`$PREFIX/bin/bash` 真实可执行），任一不满足就回退官方默认路径；生成的 wrapper 与 `cordis.patch.yml` 也按实际路径注入。
 - **非 Termux 可诊断**：不在 Termux 里跑时，`help` / `status` / `doctor` / `channels` 照常可用，写文件类命令会直接报错退出。
+- **范围显式、无默认**：`backup` / `uninstall` 的每个范围彼此平等，不带参数只列范围；`--yes` 也不能跳过数据销毁确认（删会话数据必须手输 `PURGE`）。
+- **跟随官方数据根**：`status`、补丁 7、`backup`、`uninstall` 统一按 `${DSH_HOME:-~/.dsh}` 解析，不硬编码 `~/.dsh`。
 
 ## 原理简述
 
 DSH 底层为 Linux 桌面设计，在 Android 上主要有六类水土不服：
 
-1. **文件系统**：Android 的 f2fs 拒绝 `link()`（返回 `EACCES`），而保存附件的主路径正是「临时文件 --link--> 正式文件」。脚本分两层处理：preload 劫持 `fs.link` / `fs.promises.link` 给 CJS 调用点兜底（失败时退化为 `rename`）；对 `dsh-attachment-local` 则直接把两处 `link()` 换成 `linkOrCopy()`，硬链接失败时用 `copyFile` 复制（补丁 15）——ESM 的 `import { link }` 拿的是内置模块原函数，preload 改不到它。
+1. **文件系统**：Android 的 f2fs 拒绝 `link()`（返回 `EACCES`），而保存附件的主路径正是「临时文件 --link--> 正式文件」。脚本分两层处理：preload 劫持 `fs.link` / `fs.promises.link` 给 CJS 调用点兜底（失败时退化为 `copyFile` 复制，源文件保留）；对 `dsh-attachment-local` 则直接把两处 `link()` 换成 `linkOrCopy()`，硬链接失败时用 `copyFile` 复制（补丁 15）——ESM 的 `import { link }` 拿的是内置模块原函数，preload 改不到它。
 2. **沙箱**：官方 bwrap/Landlock 后端依赖 Linux 内核能力，Android 内核不提供，脚本用 proot 做路径级替代（`runnerCommand` 注入）。
 3. **路径**：`/bin/bash`、`/tmp` 等 Linux 标准路径在 Termux 不存在，脚本统一改到 `$PREFIX` 真实路径；多用户或非默认安装位置下 `$PREFIX` 并不等于 `/data/data/com.termux/files/usr`，所以脚本先校验 `PREFIX` / `HOME` 再采用，校验不过才回退默认值。
 4. **原生依赖**：sharp 在 android-arm64 没有官方预编译二进制，脚本改用同版本 WASM 版替代。
@@ -179,28 +260,6 @@ DSH 底层为 Linux 桌面设计，在 Android 上主要有六类水土不服：
 6. **原生扩展**：dsh 部分能力依赖 Node 原生 addon，官方只发布桌面平台预编译产物。脚本按「能否本地编译」分两条路：
     - **可编译的**（如 `node-addon-system` 的 `flock`，包内自带 `src/flock.c`）：用 `clang` 现场编译成 `system.node`，放入自建的 android-arm64 平台包并放开平台守卫——保留真原生语义，内核级文件锁可用。
     - **不可编译的**（如 `node-addon-require-builtin`，源码未公开）：用 `--expose-internals` + 纯 JS 实现替代（拿到的是同一批 Node 内部模块实例）。
-
-## 备份与还原
-
-备份：
-```bash
-bash ~/apply-dsh-patches.sh backup --all
-```
-
-产物在 `~/dsh-backups/<YYYYmmdd-HHMMSS>/`：
-
-```
-dsh-home.tar.gz    # ~/.dsh（会话 + 网页端设置）
-config.tar.gz      # .npmrc / .bashrc / .gyp / cordis.patch.yml
-patches.tar.gz     # ~/bin/dsh / bwrap-proot / dsh-link-fix.js / dsh-flock-check.mjs
-workspace.tar.gz   # ~/workspace
-MANIFEST.txt       # 时间、版本、平台、还原方式
-```
-
-还原：
-```bash
-tar xzf dsh-home.tar.gz -C ~
-```
 
 ## 部分问题排查
 

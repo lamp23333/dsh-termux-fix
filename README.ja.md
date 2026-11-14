@@ -3,7 +3,6 @@
 [![lang-en](https://img.shields.io/badge/English-AAAAAA?style=for-the-badge)](./README.md)
 ![lang-ja](https://img.shields.io/badge/日本語-555555?style=for-the-badge)
 
-
 # dsh-termux-fix
 
 [![License](https://img.shields.io/badge/License-MIT-A31F34?style=flat-square)](./LICENSE)
@@ -56,14 +55,14 @@ termux-setup-storage
 
 3. パッチファイルをホームディレクトリ（つまり `~`、すなわち `/data/data/com.termux/files/home`）に取り込みます。
 
-- 単一ファイルをコピーして取り込む
+- 単一ファイルをコピーして取り込む：
 ```bash
 cp /storage/emulated/0/[パッチのあるフォルダ]/apply-dsh-patches.sh ~/
 ```
 
 または
 
-- リポジトリの zip パッケージを展開して取り込む
+- リポジトリの zip パッケージを展開して取り込む：
 ```bash
 cd ~
 unzip /storage/emulated/0/[リポジトリの zip パッケージのあるフォルダ]/dsh-termux-fix-main.zip
@@ -118,6 +117,82 @@ dsh web
 ビルド時：clang make python pkg-config（`ld` がない場合は binutils も自動で追加します）
 ```
 
+## バックアップと復元
+
+> [!IMPORTANT]
+> このセクションで扱うのは**データ全体のバックアップ**です。パッチ適用時に作成されるスナップショットは別途 `~/dsh-patch-backups/` に保存され、`restore` コマンドでロールバックします。
+
+> 以下は簡易的なバックアップ手順です。詳細な使い方は `help` または `backup --list` を参照してください。
+
+### 1. バックアップ
+
+```bash
+bash ~/apply-dsh-patches.sh backup --all
+```
+
+成果物は `~/dsh-backups/[YYYYmmdd-HHMMSS]/` に作成され、次のファイルが含まれます：
+```
+sessions.tar.gz    # セッションと添付ファイル
+settings.tar.gz    # 設定と識別情報（.credentials.yaml を含む）
+patches.tar.gz     # パッチ成果物
+workspace.tar.gz   # ワークスペース
+plugins.tar.gz     # プラグインの依存関係と状態
+MANIFEST.txt       # 日時、バージョン、データディレクトリ、範囲、復元方法
+```
+
+### 2. 復元
+
+- 単一ファイルを復元：
+```bash
+tar -xzf ~/dsh-backups/[YYYYmmdd-HHMMSS]/<name>.tar.gz -C /
+```
+
+- すべて復元：
+```bash
+for f in ~/dsh-backups/[YYYYmmdd-HHMMSS]/*.tar.gz; do tar -xzf "$f" -C /; done
+```
+
+山かっこ内はご自身の値に置き換えてください。
+
+> [!WARNING]
+> `settings.tar.gz` にはログイン認証情報などのプライベートな情報が含まれます。他人に配布しないでください！
+
+## アンインストール
+
+> 以下は簡易的なアンインストール手順です。詳細な使い方は `help` または `uninstall --list` を参照してください。
+
+### 1. アンインストール前に削除範囲を確認する（実行はされません）
+
+```bash
+bash ~/apply-dsh-patches.sh uninstall
+```
+
+### 2. アンインストールを実行する
+
+削除する範囲は、範囲一覧の番号で指定します。
+
+- 番号を 1 つだけ指定：
+```bash
+bash ~/apply-dsh-patches.sh uninstall 2
+```
+
+- 複数の番号を指定：
+```bash
+bash ~/apply-dsh-patches.sh uninstall 1 3
+```
+
+- DSH とパッチのデータをすべて消去：
+```bash
+bash ~/apply-dsh-patches.sh uninstall --all
+```
+
+> [!WARNING]
+> データはかけがえのないものです。アンインストールは慎重に行ってください！
+
+### 備考
+
+アンインストーラーは次のものには触れません：`node` / `npm` / `pnpm` などの pkg 依存パッケージ、npm キャッシュ（`~/.npm/_cacache`、`~/.local/share/pnpm/store`）、`~/.agents`、`~/node_modules`、`~/workspace`、`~/package.json`、およびバックアップとキャッシュのディレクトリ（`~/dsh-backups`、`~/dsh-patch-backups`、`~/sharp-wasm`、`~/dsh-install-logs`）。削除が必要な場合はご自身で行ってください。
+
 ## コマンド
 
 引数を指定しない場合は、使い方の説明（`help`）を表示します。
@@ -130,7 +205,8 @@ dsh web
 | `install` | DeepSeek Harness のみをインストール |
 | `all` | DeepSeek Harness とパッチをインストール |
 | `channels` | DeepSeek Harness の最新バージョンを確認 |
-| `backup` | データをバックアップ（セッション、設定、パッチ成果物、ワークスペース） |
+| `backup` | データをバックアップ |
+| `restore` | パッチのスナップショットにロールバック |
 | `uninstall` | DeepSeek Harness とパッチをアンインストール |
 | `help` | 使い方の説明を表示 |
 
@@ -144,7 +220,7 @@ dsh web
 | 4 | `~/dsh-link-fix.js` | f2fs ファイルシステムはハードリンクを禁止しているため、セッション保存時に `EACCES` が出る |
 | 5 | `~/bin/dsh` | HMR プラグインがクラッシュする（`--expose-internals` が必要）。あわせて権限モード（`DSH_PERMISSION_MODE`、既定値は `danger-full-access`）を設定する |
 | 6 | `~/bin/bwrap-proot` | サンドボックスバックエンドが存在しない（bwrap が使えないため proot に切り替え） |
-| 7 | `~/.dsh/profiles/web/cordis.patch.yml` | サンドボックスの runnerCommand インジェクション |
+| 7 | `~/.dsh/profiles/web/cordis.patch.yml`（データディレクトリ。`$DSH_HOME` に従う） | サンドボックスの runnerCommand インジェクション |
 | 8 | `dsh-subprocess-local`（動的検出） | ターミナルチェックがクラッシュする（プラットフォーム判定で Android が拒否される） |
 | 9 | `dsh-terminal-bash`（動的検出） | PTY の起動に失敗する（shellPath のデフォルトが `/bin/bash`） |
 | 10 | `node_modules/@img/sharp-wasm32` | sharp には android-arm64 用のネイティブバイナリがなく、起動時に読み込み失敗を報告する（attachment-local） |
@@ -154,25 +230,29 @@ dsh web
 | 14 | `dsh-attachment-local`（動的検出） | 添付ディレクトリの fsync が権限の範囲を超えてしまい、画像を貼っただけで `prompt rejected (session/agent-busy)` が出る |
 | 15 | `dsh-attachment-local`（動的検出） | Android の f2fs はハードリンクを許可しないため、添付の保存時に `link()` が `EACCES` になり、画像を貼ると `Unable to persist attachment.` が出る |
 
-- 3、8、9、11、12、13、14、15 番目の項目は、DeepSeek Harness インストール後に適用するパッチです。インストール時に既存のファイルを変更するため、初回実行時に元のファイルを `.bak` としてバックアップします。
+- 1、2 番目の項目は、DeepSeek Harness をインストールする前のパッチです。`install` の環境準備段階で `~/.gyp/include.gypi` と `~/.npmrc` を書き込むため、これらがないと `node-pty` がコンパイルできず、npm もパッケージを取得できません。
+- 3〜15 番目の項目は、DeepSeek Harness をインストールした後のパッチです。このうち 3、8、9、11、12、13、14、15 番目は既存のファイルを変更するパッチです。
+- 変更前の元ファイルは `~/dsh-patch-backups/[YYYYmmdd-HHMMSS]/` にまとめてバックアップされます（`lib/` は dsh パッケージ内、`home/` はホームディレクトリ、`abs/` はその他の絶対パスに対応）。1 つのスナップショット内では同じファイルは最初の 1 件だけが保持され、スナップショットには `MANIFEST.txt`（日時、dsh バージョン、取得元のパス、サイズ、sha256）が付属します。
 
 ## スクリプトの特長
 
 - **冪等**：何度でも実行でき、適用済みのパッチは自動でスキップされ、二重に変更されることはありません。
-- **自動バックアップ**：パッケージレベルの変更は自動で `.bak` としてバックアップされ、ロールバックできます。
+- **自動バックアップ**：パッチ適用前に元ファイルを `~/dsh-patch-backups/[YYYYmmdd-HHMMSS]/` にまとめてバックアップし、1 つのスナップショット内では同じファイルは最初の 1 件だけが保持されます。`restore [YYYYmmdd-HHMMSS]` でスナップショット全体をロールバックでき、`--only=[文字列]` を付けると相対パスにその文字列を含むファイルだけをロールバックします（例：`--only=index.js`）。ロールバックの前には現在のファイルを新しいスナップショットとして保存するため、ロールバック自体を元に戻すこともできます。何も変更しなかった場合は空のスナップショットを残しません。
 - **パッケージ分割耐性**：パッケージレベルのパッチは「コードの特徴的な文字列」で対象ファイルを特定し、`lib/index.js` を決め打ちしません。dsh はコードを `lib/runner-launch-<hash>.js` のようなハッシュ名のファイルに分割します（hash はリリースごとに変わります）ため、パスの決め打ちは必ず失敗します。
 - **パッケージ未インストール時に誤検出しない**：該当するパッケージがインストールされていない場合は `[SKIP]` と出力し、失敗として数えません。
 - **セルフチェック**：実行後に `[OK]/[FAIL]` の一覧を出力し、すべての項目が通って初めて成功とみなします（依存関係が欠けている項目は `[SKIP]` と表示され、カウントされません）。sed による変更はさらに grep で再確認し、期待どおりでなければ直ちに `[FAIL]` を報告します。
-- **機密情報を扱わない**：API Key、セッション履歴、認証情報ファイルには一切触れません。
+- **インストール中は機密情報に触れない**：インストールとパッチ適用のいずれも、API Key、セッション履歴、認証情報ファイルを変更しません。ただしバックアップとアンインストールは例外です：`backup 2` は `.credentials.yaml` を `settings.tar.gz` に含め、`uninstall 5` は `.credentials.yaml` を削除し、`uninstall 7` は `sessions` / `attachments` / `storages` を削除します。
 - **ネイティブ拡張のローカルコンパイル**：`flock` は Termux 上で `clang` を使ってその場でコンパイルします（`nodejs` パッケージに同梱される `node_api.h` だけで足ります）。node-gyp に依存せず、プリビルド成果物をネットワークからダウンロードする必要もありません。
 - **パスの自動調整**：`PREFIX` / `HOME` は検証してから採用します（空でないこと、絶対パスであること、`.../com.termux/files/usr` の形であること、`$PREFIX/bin/bash` が実際に実行可能であること）。いずれかの条件を満たさない場合は公式のデフォルトパスにフォールバックします。生成される wrapper と `cordis.patch.yml` も実際のパスに合わせて注入されます。
 - **Termux 外でも診断可能**：Termux の中で実行していない場合でも、`help` / `status` / `doctor` / `channels` は通常どおり使え、ファイル書き込み系のコマンドはエラーを出してすぐ終了します。
+- **範囲を明示、デフォルトなし**：`backup` / `uninstall` の各範囲は対等で、引数なしでは範囲を一覧表示するだけです。`--yes` でもデータ破棄の確認は省略できません（セッションデータの削除には `PURGE` の手入力が必要です）。
+**公式のデータディレクトリに追従**：`status`、7 番目のパッチ、`backup`、`uninstall` はいずれも `${DSH_HOME:-~/.dsh}` でデータディレクトリを解決し、`~/.dsh` を決め打ちしません。
 
 ## 原理の概要
 
 DSH は基本的に Linux デスクトップ向けに設計されており、Android 上では主に 6 種類の不適合があります：
 
-1. **ファイルシステム**：Android の f2fs は `link()` を拒否します（`EACCES` を返します）。しかも添付を保存する主要な経路は、まさに「一時ファイル --link--> 正式なファイル」です。スクリプトは二段構えで対処します。preload で `fs.link` / `fs.promises.link` をフックし、CommonJS 側の呼び出しにフォールバック（失敗時は `rename`）を用意する。加えて `dsh-attachment-local` では 2 か所の `link()` を `linkOrCopy()` に置き換え、ハードリンクに失敗したら `copyFile` でコピーします（15 番目の項目）——ESM の `import { link }` は組み込みモジュールの元の関数を取得するため、preload ではフックできません。
+1. **ファイルシステム**：Android の f2fs は `link()` を拒否します（`EACCES` を返します）。しかも添付を保存する主要な経路は、まさに「一時ファイル --link--> 正式なファイル」です。スクリプトは二段構えで対処します。preload で `fs.link` / `fs.promises.link` をフックし、CommonJS 側の呼び出し向けにフォールバックを用意します（失敗時は `copyFile` でコピーし、元のファイルは残します）。加えて `dsh-attachment-local` では 2 か所の `link()` を `linkOrCopy()` に置き換え、ハードリンクに失敗したら `copyFile` でコピーします（15 番目の項目）——ESM の `import { link }` は組み込みモジュールの元の関数を取得するため、preload ではフックできません。
 2. **サンドボックス**：公式の bwrap/Landlock バックエンドは Linux カーネルの機能に依存していますが、Android カーネルはそれを提供しません。スクリプトは proot でパスレベルの代替を行います（`runnerCommand` インジェクション）。
 3. **パス**：`/bin/bash` や `/tmp` などの Linux 標準パスは Termux には存在しないため、スクリプトは一律に `$PREFIX` 下の実際のパスに変更します。マルチユーザー環境やデフォルト以外のインストール位置では `$PREFIX` は `/data/data/com.termux/files/usr` と等しくないため、スクリプトは `PREFIX` / `HOME` を検証してから採用し、検証に通らない場合のみデフォルト値にフォールバックします。
 4. **ネイティブ依存**：sharp には android-arm64 向けの公式プリビルドバイナリがないため、スクリプトは同バージョンの WASM 版で代替します。
@@ -180,28 +260,6 @@ DSH は基本的に Linux デスクトップ向けに設計されており、And
 6. **ネイティブ拡張**：dsh の一部機能は Node のネイティブアドオンに依存しており、公式はデスクトッププラットフォーム向けのプリビルド成果物しか公開していません。スクリプトは「ローカルでコンパイルできるか」で 2 つの道筋に分けます：
     - **コンパイルできるもの**（例：`node-addon-system` の `flock`。パッケージに `src/flock.c` が同梱）：`clang` でその場で `system.node` にコンパイルし、自作の android-arm64 プラットフォームパッケージに入れてプラットフォームガードを外します——本来のネイティブなセマンティクスが保たれ、カーネルレベルのファイルロックが利用できます。
     - **コンパイルできないもの**（例：`node-addon-require-builtin`。ソースコードは非公開）：`--expose-internals` + 純粋な JS 実装で代替します（得られるのは同一の Node 内部モジュールのインスタンスです）。
-
-## バックアップと復元
-
-バックアップ：
-```bash
-bash ~/apply-dsh-patches.sh backup --all
-```
-
-成果物は `~/dsh-backups/<YYYYmmdd-HHMMSS>/` にあります：
-
-```
-dsh-home.tar.gz    # ~/.dsh（セッション + Web UI 設定）
-config.tar.gz      # .npmrc / .bashrc / .gyp / cordis.patch.yml
-patches.tar.gz     # ~/bin/dsh / bwrap-proot / dsh-link-fix.js / dsh-flock-check.mjs
-workspace.tar.gz   # ~/workspace
-MANIFEST.txt       # 日時、バージョン、プラットフォーム、復元方法
-```
-
-復元：
-```bash
-tar xzf dsh-home.tar.gz -C ~
-```
 
 ## トラブルシューティング
 

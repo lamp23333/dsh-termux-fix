@@ -53,7 +53,7 @@ termux-setup-storage
 ```
 （執行後會出現權限授權對話框，請點「允許」）
 
-3. 將修補檔案放進家目錄（即 `~`，或 `/data/data/com.termux/files/home`）。
+3. 將修補檔案放進 Home 目錄（即 `~`，或 `/data/data/com.termux/files/home`）。
 
 - 複製單一檔案：
 ```bash
@@ -62,7 +62,7 @@ cp /storage/emulated/0/[修補程式所在資料夾]/apply-dsh-patches.sh ~/
 
 或者
 
-- 解壓縮儲存庫壓縮檔
+- 解壓縮儲存庫壓縮檔：
 ```bash
 cd ~
 unzip /storage/emulated/0/[儲存庫壓縮檔所在資料夾]/dsh-termux-fix-main.zip
@@ -117,6 +117,82 @@ dsh web
 編譯時：clang make python pkg-config（缺少 `ld` 時另會補裝 binutils）
 ```
 
+## 備份與還原
+
+> [!IMPORTANT]
+> 本節說明的是**完整資料備份**；套用修補程式時產生的快照備份另存於 `~/dsh-patch-backups/` 資料夾中，以 `restore` 指令回滾。
+
+> 以下為簡易備份流程，詳細備份用法請見 `help` 或 `backup --list`。
+
+### 1. 備份
+
+```bash
+bash ~/apply-dsh-patches.sh backup --all
+```
+
+備份產物位於 `~/dsh-backups/[YYYYmmdd-HHMMSS]/` 資料夾中，包含下列檔案：
+```
+sessions.tar.gz    # 工作階段與附件
+settings.tar.gz    # 設定與身分（含 .credentials.yaml）
+patches.tar.gz     # 修補程式產物
+workspace.tar.gz   # 工作區
+plugins.tar.gz     # 外掛相依性與外掛狀態
+MANIFEST.txt       # 時間、版本、資料根、範圍、還原方式
+```
+
+### 2. 還原
+
+- 單一檔案還原：
+```bash
+tar -xzf ~/dsh-backups/[YYYYmmdd-HHMMSS]/<name>.tar.gz -C /
+```
+
+- 全部還原：
+```bash
+for f in ~/dsh-backups/[YYYYmmdd-HHMMSS]/*.tar.gz; do tar -xzf "$f" -C /; done
+```
+
+尖括號中的內容請自行填寫。
+
+> [!WARNING]
+> `settings.tar.gz` 含登入憑證等隱私資訊，請勿外流給他人！
+
+## 解除安裝
+
+> 以下為簡易解除安裝流程，詳細解除安裝用法請見 `help` 或 `uninstall --list`。
+
+### 1. 解除安裝前先確認刪除範圍，不執行
+
+```bash
+bash ~/apply-dsh-patches.sh uninstall
+```
+
+### 2. 執行解除安裝
+
+依範圍清單中的編號選擇要解除安裝的範圍。
+
+- 可只選一個編號：
+```bash
+bash ~/apply-dsh-patches.sh uninstall 2
+```
+
+- 也可多選編號：
+```bash
+bash ~/apply-dsh-patches.sh uninstall 1 3
+```
+
+- 或抹除 DSH 與修補程式的全部資料：
+```bash
+bash ~/apply-dsh-patches.sh uninstall --all
+```
+
+> [!WARNING]
+> 資料無價，解除安裝請謹慎操作！
+
+### 備註
+
+解除安裝程序不會更動：`node` / `npm` / `pnpm` 等 pkg 相依套件、npm 快取（`~/.npm/_cacache`、`~/.local/share/pnpm/store`）、`~/.agents`、`~/node_modules`、`~/workspace`、`~/package.json`，以及備份與快取目錄（`~/dsh-backups`、`~/dsh-patch-backups`、`~/sharp-wasm`、`~/dsh-install-logs`）。如有刪除需求，請自行刪除。
+
 ## 指令
 
 不帶參數時，會印出使用說明（`help`）。
@@ -129,7 +205,8 @@ dsh web
 | `install` | 僅安裝 DeepSeek Harness |
 | `all` | 安裝 DeepSeek Harness 與修補程式 |
 | `channels` | 查詢 DeepSeek Harness 最新版本 |
-| `backup` | 備份資料（工作階段、設定、修補程式產物、工作區） |
+| `backup` | 備份資料 |
+| `restore` | 回滾至某個修補快照 |
 | `uninstall` | 解除安裝 DeepSeek Harness 與修補程式 |
 | `help` | 顯示使用說明 |
 
@@ -143,7 +220,7 @@ dsh web
 | 4 | `~/dsh-link-fix.js` | f2fs 檔案系統禁止硬連結，儲存工作階段時出現 `EACCES` |
 | 5 | `~/bin/dsh` | HMR 外掛崩潰（需 `--expose-internals`），另設定權限模式（`DSH_PERMISSION_MODE`，預設 `danger-full-access`） |
 | 6 | `~/bin/bwrap-proot` | 沙箱後端缺失（bwrap 不可用，改用 proot） |
-| 7 | `~/.dsh/profiles/web/cordis.patch.yml` | 沙箱 runnerCommand 注入 |
+| 7 | `~/.dsh/profiles/web/cordis.patch.yml`（資料根，遵循 `$DSH_HOME`） | 沙箱 runnerCommand 注入 |
 | 8 | `dsh-subprocess-local`（動態定位） | 終端機檢查失敗（平台偵測不接受 Android） |
 | 9 | `dsh-terminal-bash`（動態定位） | PTY 啟動失敗（shellPath 預設 `/bin/bash`） |
 | 10 | `node_modules/@img/sharp-wasm32` | sharp 無 android-arm64 原生二進位檔，啟動時回報載入失敗（attachment-local） |
@@ -153,25 +230,29 @@ dsh web
 | 14 | `dsh-attachment-local`（動態定位） | 附件目錄的 fsync 超出權限範圍，一貼圖就會出現 `prompt rejected (session/agent-busy)` |
 | 15 | `dsh-attachment-local`（動態定位） | Android 的 f2fs 不允許硬連結，儲存附件時 `link()` 回報 `EACCES`，一貼圖就出現 `Unable to persist attachment.` |
 
-- 第 3、8、9、11、12、13、14、15 項為 DeepSeek Harness 安裝後修補程式，安裝時會修改既有檔案，首次執行把原件備份成 `.bak`。
+- 第 1、2 項是安裝 DeepSeek Harness 前的修補程式。`install` 的環境準備階段就會寫入 `~/.gyp/include.gypi` 與 `~/.npmrc`，否則 `node-pty` 會編譯失敗，npm 也無法下載套件。
+- 第 3~15 項是安裝 DeepSeek Harness 後的修補程式。其中第 3、8、9、11、12、13、14、15 項是修改既有檔案的修補程式。
+- 修改前的原件集中備份到 `~/dsh-patch-backups/[YYYYmmdd-HHMMSS]/`（`lib/` 對應 dsh 套件內、`home/` 對應 Home 目錄、`abs/` 對應其他絕對路徑），同一份快照內同一檔案只保留最早一份，快照中附有 `MANIFEST.txt`（時間、dsh 版本、來源路徑、大小、sha256）。
 
 ## 腳本特性
 
 - **冪等**：可重複執行，已打修補程式自動跳過，不會重複修改。
-- **自動備份**：套件級修改會自動備份為 `.bak`，可回滾。
+- **自動備份**：套用修補程式前，會先將原件集中備份到 `~/dsh-patch-backups/[YYYYmmdd-HHMMSS]/`，同一份快照內同一檔案只保留最早一份；`restore [YYYYmmdd-HHMMSS]` 可整份回滾，加上 `--only=[文字]` 則只回滾相對路徑包含該文字的檔案（例：`--only=index.js`），回滾前還會先將目前檔案另存一份（可再回滾）。未修改任何檔案時不會留下空快照。
 - **不受程式碼拆分影響**：套件級修補程式按「程式碼特徵字串」定位目標檔案，不寫死 `lib/index.js`。dsh 會把程式碼拆進 `lib/runner-launch-<hash>.js` 這類雜湊命名檔案（hash 每次發版都變），寫死路徑必然失效。
 - **套件缺失不誤報**：對應套件未安裝時輸出 `[SKIP]`，不計入失敗項。
 - **自我檢查**：執行完畢後輸出 `[OK]/[FAIL]` 清單，所有項全部通過才算成功（依賴缺失的項顯示 `[SKIP]` 且不計入）；sed 類修改會再以 grep 複查，不符預期直接回報 `[FAIL]`。
-- **不含敏感資訊**：不會碰觸 API Key、工作階段歷史或憑證檔案。
+- **安裝過程不碰敏感資訊**：安裝與套用修補程式都不會變更 API Key、工作階段歷史與憑證檔案。但備份與解除安裝是例外：使用備份指令 `backup 2` 會把 `.credentials.yaml` 打包進 `settings.tar.gz`，使用解除安裝指令 `uninstall 5` 會刪除 `.credentials.yaml`，使用解除安裝指令 `uninstall 7` 會刪除 `sessions` / `attachments` / `storages`。
 - **本機編譯原生擴充**：`flock` 直接在 Termux 上用 `clang` 編譯（只需 `nodejs` 套件內附的 `node_api.h`），不依賴 node-gyp，也不需要連線下載預編譯產物。
 - **路徑自動調整**：`PREFIX` / `HOME` 先驗證再採用（非空、絕對路徑、形如 `.../com.termux/files/usr`、`$PREFIX/bin/bash` 真實可執行），任一不滿足就回退官方預設路徑；產生的 wrapper 與 `cordis.patch.yml` 也按實際路徑注入。
 - **非 Termux 可診斷**：不在 Termux 中執行時，`help` / `status` / `doctor` / `channels` 照常可用，寫入檔案類指令會直接報錯退出。
+- **範圍明確、無預設**：`backup` / `uninstall` 的各範圍地位相同，不帶參數只會列出範圍；`--yes` 也不能跳過資料銷毀確認（刪除工作階段資料必須手動輸入 `PURGE`）。
+- **跟隨官方資料根**：`status`、第 7 項修補程式、`backup`、`uninstall` 一律依 `${DSH_HOME:-~/.dsh}` 解析，不寫死 `~/.dsh`。
 
 ## 原理簡述
 
 DSH 底層為 Linux 桌面設計，在 Android 上主要有六類水土不服：
 
-1. **檔案系統**：Android 的 f2fs 會拒絕 `link()`（回傳 `EACCES`），而儲存附件的主要路徑正是「暫存檔案 --link--> 正式檔案」。腳本分兩層處理：以 preload 攔截 `fs.link` / `fs.promises.link`，為 CJS 呼叫點提供備援（失敗時退回 `rename`）；對 `dsh-attachment-local` 則直接把兩處 `link()` 換成 `linkOrCopy()`，硬連結失敗時改用 `copyFile` 複製（第 15 項）——ESM 的 `import { link }` 取得的是內建模組的原函式，preload 攔截不到。
+1. **檔案系統**：Android 的 f2fs 會拒絕 `link()`（回傳 `EACCES`），而儲存附件的主要路徑正是「暫存檔案 --link--> 正式檔案」。腳本分兩層處理：以 preload 攔截 `fs.link` / `fs.promises.link`，為 CJS 呼叫點提供備援（失敗時退回以 `copyFile` 複製，來源檔案保留）；對 `dsh-attachment-local` 則直接把兩處 `link()` 換成 `linkOrCopy()`，硬連結失敗時改用 `copyFile` 複製（第 15 項）——ESM 的 `import { link }` 取得的是內建模組的原函式，preload 攔截不到。
 2. **沙箱**：官方 bwrap/Landlock 後端依賴 Linux 核心能力，Android 核心不提供，腳本用 proot 做路徑級替代（`runnerCommand` 注入）。
 3. **路徑**：`/bin/bash`、`/tmp` 等 Linux 標準路徑在 Termux 不存在，腳本統一改到 `$PREFIX` 真實路徑；多使用者或非預設安裝位置下 `$PREFIX` 並不等於 `/data/data/com.termux/files/usr`，所以腳本先驗證 `PREFIX` / `HOME` 再採用，驗證不過才回退預設值。
 4. **原生依賴**：sharp 在 android-arm64 沒有官方預編譯二進位檔，腳本改用同版本的 WASM 版本代替。
@@ -179,28 +260,6 @@ DSH 底層為 Linux 桌面設計，在 Android 上主要有六類水土不服：
 6. **原生擴充**：dsh 部分能力依賴 Node 原生 addon，官方只發布桌面平台預編譯產物。腳本按「能否本機編譯」分兩條路：
     - **可編譯的**（如 `node-addon-system` 的 `flock`，套件內自帶 `src/flock.c`）：用 `clang` 直接編譯成 `system.node`，放入自建的 android-arm64 平台套件並繞過平台檢查——保留真正的原生語意，核心級檔案鎖可用。
     - **不可編譯的**（如 `node-addon-require-builtin`，原始碼未公開）：用 `--expose-internals` + 純 JS 實作替代（取得的是同一組 Node 內部模組實例）。
-
-## 備份與還原
-
-備份：
-```bash
-bash ~/apply-dsh-patches.sh backup --all
-```
-
-備份產物位於 `~/dsh-backups/<YYYYmmdd-HHMMSS>/`：
-
-```
-dsh-home.tar.gz    # ~/.dsh（工作階段 + 網頁介面設定）
-config.tar.gz      # .npmrc / .bashrc / .gyp / cordis.patch.yml
-patches.tar.gz     # ~/bin/dsh / bwrap-proot / dsh-link-fix.js / dsh-flock-check.mjs
-workspace.tar.gz   # ~/workspace
-MANIFEST.txt       # 時間、版本、平台、還原方式
-```
-
-還原：
-```bash
-tar xzf dsh-home.tar.gz -C ~
-```
 
 ## 部分問題排解
 
