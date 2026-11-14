@@ -3,7 +3,7 @@
 # apply-dsh-patches.sh —— Termux 部署 DeepSeek Harness (dsh) 一键补丁
 #
 # 作用：固化从最初安装到现在遇到的所有问题修复，一次跑完全部生效。
-# 特性：幂等（可重复运行）、改包自动备份 .bak、跑完自检、sed 失败会报 FAIL。
+# 特性：幂等（可重复运行）、改动前原件集中备份、跑完自检、sed 失败会报 FAIL。
 # 用法：bash apply-dsh-patches.sh [命令]
 #        无参数 = help（使用说明）；看状态用 status
 #
@@ -11,7 +11,7 @@
 # 代码拆进 lib/runner-launch-<hash>.js 这类哈希命名的 chunk（hash 每次发版都
 # 变），写死路径必然失效。sed 同时兼容单引号 / 双引号两种写法。
 #
-# 覆盖 14 项必选修复：
+# 覆盖 15 项必选修复：
 #   1. ~/.gyp/include.gypi          —— node-pty 编译的 android_ndk_path
 #   2. ~/.npmrc                     —— npm 镜像（npmmirror + foreground-scripts）
 #   3. ~/.bashrc                    —— PATH 含 ~/bin（dsh 命令可找到）
@@ -26,6 +26,7 @@
 #  12. node-addon-require-builtin   —— Android 无原生 binding，改用 --expose-internals 的 JS 实现
 #  13. node-addon-system            —— flock 的 android-arm64（本地编译 system.node + 放开平台守卫）
 #  14. dsh-attachment-local         —— Android 附件目录 fsync 权限容错（贴图发不出去）
+#  15. dsh-attachment-local         —— Android 禁硬链接：link 失败退回本机复制（贴图发不出去）
 # ============================================================================
 
 # ---- 环境定位 --------------------------------------------------------------
@@ -70,6 +71,8 @@ export PREFIX                       # 子进程（node / npm）与脚本用同�
 if [ "$TERMUX_OK" -eq 1 ]; then
   export HOME="$HOME_DIR"
 fi
+# dsh 用户数据根：官方 dsh-home-paths 支持 $DSH_HOME 覆盖（空值视为未设），默认 ~/.dsh
+DSH_DATA="${DSH_HOME:-$HOME_DIR/.dsh}"
 DSH_ROOT="$PREFIX/lib/node_modules/@deepseek-ai/dsh"
 DSH_NM="$DSH_ROOT/node_modules"
 BASH_PATH="$PREFIX/bin/bash"
@@ -81,6 +84,119 @@ skip() { emit_state "[SKIP]" "$C_WARN" "$*"; }
 
 # 读取某个已安装 npm 包的版本号（不存在则输出空字符串）
 pkg_ver() { node -p "require('$1/package.json').version" 2>/dev/null; }
+
+# sharp 真加载探针：能 import 并编码出一张 2x2 PNG 才算可用。
+# 只 test -d 目录无法发现「目录在、但 import 失败」的情况。
+_sharp_ok() {
+  ( cd "$DSH_ROOT" && node -e 'import("sharp").then(async m=>{const b=await m.default({create:{width:2,height:2,channels:3,background:"#fff"}}).png().toBuffer();process.exit(b.length>10?0:1)}).catch(()=>process.exit(1))' )
+}
+
+# dsh-terminal-bash 探针：只看 JS（*.js / *.mjs / *.cjs）。
+#   ① 至少一个 JS 含 Termux 的 bash 路径；② 没有任何 JS 还留着 /bin/bash 默认值。
+# 不把 .d.ts 算进来：类型声明里出现路径，不代表运行时默认值被改过（否则会虚绿）。
+_tb_ok() {
+  local d="$DSH_NM/@deepseek-ai/dsh-terminal-bash/lib"
+  [ -d "$d" ] || return 1
+  grep -rqF --include='*.js' --include='*.mjs' --include='*.cjs' --exclude='*.bak' -- \
+       "$BASH_PATH" "$d" 2>/dev/null || return 1
+  ! grep -rqE --include='*.js' --include='*.mjs' --include='*.cjs' --exclude='*.bak' \
+       'DEFAULT_BASH_SHELL = "/bin/bash"|default\("/bin/bash"\)' "$d" 2>/dev/null
+}
+
+# ---- 补丁文件备份（集中式）---------------------------------------------------
+# 打补丁会改动 dsh 包内文件与几个家目录文件。改动前的原件统一备份到
+#   ~/dsh-patch-backups/<时间戳>/<类别>/<相对路径>
+# 类别三种：lib（相对 $PREFIX/lib/node_modules）、home（相对家目录）、abs（其它绝对路径）
+# 同一次运行内同一文件只留最早一份（最接近原版）；没改动任何文件就不留下空快照。
+# 清单 MANIFEST.txt 记录：时间、dsh 版本、来源绝对路径、大小、sha256、所属补丁项。
+BK_ROOT="$HOME_DIR/dsh-patch-backups"
+BK_DIR=""
+BK_DEST=""
+BK_COUNT=0
+
+bk_rel() {   # $1=绝对路径 → 类别/相对路径
+  case "$1" in
+    "$DSH_NM"/*)   printf 'lib/%s' "${1#"$DSH_NM"/}" ;;
+    "$HOME_DIR"/*) printf 'home/%s' "${1#"$HOME_DIR"/}" ;;
+    *)             printf 'abs/%s' "${1#/}" ;;
+  esac
+}
+
+bk_abs() {   # $1=类别/相对路径 → 绝对路径（恢复用）
+  case "$1" in
+    lib/*)  printf '%s/%s' "$DSH_NM" "${1#lib/}" ;;
+    home/*) printf '%s/%s' "$HOME_DIR" "${1#home/}" ;;
+    abs/*)  printf '/%s' "${1#abs/}" ;;
+    *)      printf '' ;;
+  esac
+}
+
+bk_init() {   # 建快照目录并写清单头（幂等）
+  [ -n "$BK_DIR" ] && return 0
+  if _dry; then BK_DIR="(模拟批次)"; return 0; fi
+  local base n=1
+  base="$BK_ROOT/$(date +%Y%m%d-%H%M%S)"
+  BK_DIR="$base"
+  while [ -e "$BK_DIR" ]; do n=$((n+1)); BK_DIR="$base-$n"; done
+  mkdir -p "$BK_DIR" || { BK_DIR=""; return 1; }
+  {
+    echo "快照：$(basename "$BK_DIR")"
+    echo "时间：$(date '+%Y-%m-%d %H:%M:%S')"
+    echo "dsh ：$(pkg_ver "$DSH_ROOT" 2>/dev/null || echo 未安装)"
+    echo "前缀：$PREFIX"
+    echo "家目录：$HOME_DIR"
+    echo "说明：补丁改动前的原件；同一份快照内同一文件只保留最早一份。"
+    echo "恢复：bash ~/apply-dsh-patches.sh restore $(basename "$BK_DIR")"
+    echo
+    echo "项   大小    sha256        备份 ← 来源"
+    echo "--------------------------------------------------------------------"
+  } > "$BK_DIR/MANIFEST.txt"
+}
+
+bk_prepare() {   # $1=源路径 → 设 BK_DEST（只算路径，不复制；已有则留空）
+  bk_init || return 1
+  if _dry; then BK_DEST=""; return 0; fi
+  BK_DEST="$BK_DIR/$(bk_rel "$1")"
+  [ -e "$BK_DEST" ] && BK_DEST=""
+  return 0
+}
+
+bk_note() {   # $1=源 $2=备份 $3=所属补丁项 → 记入清单
+  [ -f "$2" ] || return 0
+  [ -n "$BK_DIR" ] || return 0
+  local sz sum
+  sz="$(du -h "$2" 2>/dev/null | cut -f1)"
+  if havec sha256sum; then sum="$(sha256sum "$2" 2>/dev/null | cut -c1-12)"; else sum="-"; fi
+  printf '%-4s %-6s %-12s %s ← %s\n' "${3:-?}" "${sz:-?}" "${sum:--}" "${2#"$BK_DIR"/}" "$1" >> "$BK_DIR/MANIFEST.txt"
+  BK_COUNT=$((BK_COUNT+1))
+}
+
+bk_save() {   # $1=源 $2=所属补丁项 → 立即备份并记账（同快照已有则跳过）
+  local src="$1" tag="${2:-?}"
+  [ -e "$src" ] || return 0
+  if _dry; then d_log "备份 $src → ~/dsh-patch-backups/<快照>/$(bk_rel "$src")"; return 0; fi
+  bk_prepare "$src" || return 1
+  [ -n "$BK_DEST" ] || return 0
+  mkdir -p "$(dirname "$BK_DEST")" || return 1
+  cp -p "$src" "$BK_DEST" || { warn "备份失败：$src"; return 1; }
+  bk_note "$src" "$BK_DEST" "$tag"
+}
+
+bk_finalize() {   # 本次没备份任何文件 → 删掉空快照
+  [ -n "$BK_DIR" ] || return 0
+  [ "$BK_DIR" = "(模拟批次)" ] && return 0
+  if [ "$BK_COUNT" -eq 0 ]; then
+    rm -rf "$BK_DIR"; BK_DIR=""
+    rmdir "$BK_ROOT" 2>/dev/null || true     # 根目录空了就一并收掉，不留空壳
+    return 0
+  fi
+  local disp
+  disp="~${BK_DIR#"$HOME_DIR"}"
+  echo
+  ok "备份 $BK_COUNT 个文件 → $disp"
+  info "清单：$disp/MANIFEST.txt"
+  info "回滚：bash ~/apply-dsh-patches.sh restore $(basename "$BK_DIR")"
+}
 
 # ============================================================================
 # 统一入口层：命令解析 / 环境体检 / 阶段判定
@@ -311,6 +427,7 @@ usage() {
   all           安装 DeepSeek Harness 与补丁
   channels      查询 DeepSeek Harness 最新版本
   backup        备份数据
+  restore       回滚到某个补丁快照（不带参数 = 列出快照）
   uninstall     卸载 DeepSeek Harness 与补丁
   help          显示本使用说明
 
@@ -322,25 +439,38 @@ usage() {
   --scripts     尝试全量 install scripts（失败回退）
   -y, --yes     不弹出询问
 
-2. 适用于 backup
-  --all         全量备份（会话/配置/补丁/工作区）
-  --sessions    只备份会话与配置（~/.dsh）
-  --config      只备份配置文件（npm/终端/编译/网页端）
-  --patches     只备份补丁产物（~/bin/dsh 等）
-  --workspace   只备份工作区（~/workspace）
+2. 适用于 backup（每项平等，无默认；不带参数只列范围）
+  --sessions    1  会话数据（sessions / attachments / storages）
+  --settings    2  设置与身份（凭据、界面设置、插件清单与 lock）
+  --patches     3  补丁产物（~/bin/dsh 等 + 配置文件里的那几行）
+  --workspace   4  工作区（~/workspace）
+  --plugins     5  插件依赖与插件状态（99M 级）
+  --all         6  全部（= 1~5）
   --dest=路径   指定输出目录（默认 ~/dsh-backups）
   --list        列出可备份项与大小
 
-3. 适用于 uninstall
-  --only-patches 只卸补丁，保留 dsh 本体
-  --only-dsh    只卸本体，保留补丁
-  --keep-config 不动 .npmrc / .bashrc
-  --purge-data  连 ~/.dsh 一起删（需输入 PURGE）
+3. 适用于 uninstall（每项平等，无默认；不带参数只列范围）
+  固定执行顺序：插件 → 本体 → 补丁 → 配置 → 残留 → 插件状态 → 会话数据
+  --plugins     1  卸载插件（dsh plugin --profile <p> remove <包>）
+  --dsh         2  卸载本体（npm uninstall -g）
+  --patches     3  删除补丁产物
+  --config      4  清理配置改动（.npmrc / .bashrc 中的几行 + cordis.patch.yml）
+  --residual    5  删除 dsh 残留文件（保留会话数据三项）
+  --state       6  删除插件外部状态（billion-context 等在 dsh home 之外的文件）
+  --data        7  删除会话数据（不可再生；先问备份，再要 PURGE）
+  --all         8  全部（= 1~7）
+  --only-dsh / --only-patches / --keep-config    兼容旧用法
+  --purge-data  = --all（仍需输入 PURGE）
   --list        列出卸载范围
-  --yes         不询问
+  --yes         不询问常规确认（--data / --all 仍要输 PURGE）
 
-4. 适用于 patch / install / all / backup / uninstall
+4. 适用于 patch / install / all / backup / uninstall / restore
   --dry-run     模拟运行
+
+5. 适用于 restore（不带参数列出快照）
+  <快照>          回滚该快照里的全部文件
+  --only=文本     只回滚相对路径包含该文本的文件（例：--only=index.js）
+  备份位置        ~/dsh-patch-backups/<YYYYmmdd-HHMMSS>/（lib/ home/ ...）
 USAGE
   export COLUMNS="$OC"; export TW_OVERRIDE="$OTW"
   exit "${1:-0}"
@@ -443,17 +573,18 @@ patch_scan() {
   _pc "~/dsh-link-fix.js（硬链接 fallback）"           test -f "$HOME_DIR/dsh-link-fix.js"
   _pc "~/bin/dsh（启动 wrapper）"                      test -x "$HOME_DIR/bin/dsh"
   _pc "~/bin/bwrap-proot（沙箱 runner）"               test -x "$HOME_DIR/bin/bwrap-proot"
-  _pc "cordis.patch.yml（runnerCommand）"              grep -q runnerCommand "$HOME_DIR/.dsh/profiles/web/cordis.patch.yml"
+  _pc "cordis.patch.yml（runnerCommand）"              grep -q runnerCommand "$DSH_DATA/profiles/web/cordis.patch.yml"
   _pc "subprocess-local（android 终端检查）"           grep -rqE 'platform === .android.' "$DSH_NM/@deepseek-ai/dsh-subprocess-local/lib"
-  _pc "terminal-bash（shellPath 指向 Termux bash）"    grep -rq "$BASH_PATH" "$DSH_NM/@deepseek-ai/dsh-terminal-bash/lib"
+  _pc "terminal-bash（shellPath 指向 Termux bash）"    _tb_ok
   _pc "client-connection（SameSite=Lax）"              grep -rq "SameSite=Lax" "$DSH_NM/@deepseek-ai/dsh-client-connection/lib"
   _pc "require-builtin（JS 实现）"                     grep -rq "js-expose-internals" "$DSH_NM/node-addon-require-builtin"
   _pc "attachment-local（附件 fsync 权限容错）"        grep -rq "dsh-android-sync-guard" "$DSH_NM/@deepseek-ai/dsh-attachment-local/lib"
+  _pc "attachment-local（硬链接退回复制）"              grep -rq "dsh-android-link-guard" "$DSH_NM/@deepseek-ai/dsh-attachment-local/lib"
   if [ -d "$NS_ROOT" ]; then
     _pc "flock android（产物 + 可获锁）"               node "$HOME_DIR/dsh-flock-check.mjs" "$NS_ROOT"
   fi
   if [ -d "$DSH_NM/sharp" ]; then
-    _pc "sharp-wasm32（图片解码）"                     test -d "$DSH_NM/@img/sharp-wasm32"
+    _pc "sharp（可加载 + 编码）"                       _sharp_ok
   fi
 }
 
@@ -577,13 +708,13 @@ EOF
 
   echo "[4] 运行前提"
   if [ "$detail" -eq 1 ]; then
-    s_info "~/.dsh     $HOME_DIR/.dsh  $([ -d "$HOME_DIR/.dsh" ] && echo "$(tagok 存在)（$(du -sh "$HOME_DIR/.dsh" 2>/dev/null | cut -f1)）" || echo "$(tagbad 不存在)")"
+    s_info "dsh 数据根 $DSH_DATA  $([ -d "$DSH_DATA" ] && echo "$(tagok 存在)（$(du -sh "$DSH_DATA" 2>/dev/null | cut -f1)）" || echo "$(tagbad 不存在)")"
     s_info "~/workspace $HOME_DIR/workspace  $([ -d "$HOME_DIR/workspace" ] && echo "$(tagok 存在)" || echo "$(tagbad 不存在)")"
     s_info "~/.npmrc   $(grep -c . "$HOME_DIR/.npmrc" 2>/dev/null || echo 0) 行，registry = $(grep -i '^registry' "$HOME_DIR/.npmrc" 2>/dev/null | tail -1 | cut -d= -f2-)"
     s_info "剩余空间   $(df -h "$HOME_DIR" 2>/dev/null | tail -1 | awk '{print $4}')"
     s_info "日志目录   $LOG_DIR"
   fi
-  [ -d "$HOME_DIR/.dsh" ] && s_ok "~/.dsh 已初始化" || s_warn "~/.dsh 不存在（首次启动会自动创建）"
+  [ -d "$DSH_DATA" ] && s_ok "dsh 数据根已初始化（$DSH_DATA）" || s_warn "dsh 数据根不存在（首次启动会自动创建）"
   [ -d "$HOME_DIR/workspace" ] && s_ok "~/workspace 存在" || s_warn "~/workspace 不存在（建议 mkdir -p ~/workspace）"
   echo
 
@@ -1248,7 +1379,7 @@ cmd_patch_checked() {
 
 run_patches() {   # $1=stage 时作为「步骤 3 / 3」子标题
   if [ "${1:-}" = "stage" ]; then
-    say "步骤 3 / 3   安装 dsh-termux-fix 补丁"
+    say "步骤 3 / $STEPS   安装 dsh-termux-fix 补丁"
   else
     bar; echo " dsh-termux-fix 补丁程序"; bar
   fi
@@ -1279,7 +1410,7 @@ fi
 echo ""
 
 # ---------- 1. gyp：node-pty 编译的 android_ndk_path ----------
-log "1/13 写入 ~/.gyp/include.gypi (node-pty 编译修复)"
+log "1/15 写入 ~/.gyp/include.gypi (node-pty 编译修复)"
 d_mkdir "$HOME_DIR/.gyp"
 if grep -q "android_ndk_path" "$HOME_DIR/.gyp/include.gypi" 2>/dev/null; then
   ok "~/.gyp/include.gypi（已存在，跳过）"
@@ -1289,38 +1420,73 @@ else
 fi
 
 # ---------- 2. npm 镜像 ----------
-log "2/13 配置 ~/.npmrc (npmmirror 镜像)"
+log "2/15 配置 ~/.npmrc (npmmirror 镜像)"
 d_touch "$HOME_DIR/.npmrc"
 grep -q '^registry=' "$HOME_DIR/.npmrc" 2>/dev/null || d_echoapp "$HOME_DIR/.npmrc" 'registry=https://registry.npmmirror.com'
 grep -q '^foreground-scripts=' "$HOME_DIR/.npmrc" 2>/dev/null || d_echoapp "$HOME_DIR/.npmrc" 'foreground-scripts=true'
 ok "~/.npmrc"
 
 # ---------- 3. PATH ----------
-log "3/13 配置 ~/.bashrc (PATH 含 ~/bin)"
+log "3/15 配置 ~/.bashrc (PATH 含 ~/bin)"
 d_touch "$HOME_DIR/.bashrc"
 # 仅清理会导致 HMR 报错的历史 NODE_OPTIONS，保留你自己设置的其它 NODE_OPTIONS
-[ -f "$HOME_DIR/.bashrc.bak" ] || d_cp "$HOME_DIR/.bashrc" "$HOME_DIR/.bashrc.bak"
+# 只在真要改动时备份（有历史 NODE_OPTIONS 行，或还没写 PATH）
+if grep -q 'NODE_OPTIONS.*expose-internals' "$HOME_DIR/.bashrc" 2>/dev/null \
+   || ! grep -q 'HOME/bin' "$HOME_DIR/.bashrc" 2>/dev/null; then
+  bk_save "$HOME_DIR/.bashrc" 3
+fi
 d_sed '/NODE_OPTIONS.*expose-internals/d' "$HOME_DIR/.bashrc"
 grep -q 'HOME/bin' "$HOME_DIR/.bashrc" 2>/dev/null || d_echoapp "$HOME_DIR/.bashrc" 'export PATH=$HOME/bin:$PATH'
 ok "~/.bashrc"
 
 # ---------- 4. fs.link fallback preload ----------
-log "4/13 写入 ~/dsh-link-fix.js (f2fs 硬链接 fallback)"
+log "4/15  写入 ~/dsh-link-fix.js (f2fs 硬链接 fallback：复制)"
 d_out "$HOME_DIR/dsh-link-fix.js" <<'EOF'
 'use strict';
 const fs = require('fs');
+const COPY_EXCL = fs.constants.COPYFILE_EXCL;
 function isFallback(err) {
   return err && (err.code === 'EACCES' || err.code === 'EPERM' || err.code === 'ENOTSUP' || err.code === 'EXDEV');
+}
+function isSyncTolerable(err) {
+  return err && (err.code === 'EACCES' || err.code === 'EPERM' || err.code === 'EINVAL' || err.code === 'EROFS');
+}
+/* link 的语义是「新增一个名字，源名字保留」；rename 会把源名字搬走，
+ * 调用方随后 unlink(src) 必然 ENOENT（dsh-attachment-local 就踩了这个坑）。
+ * 因此回退必须是复制，且用 COPYFILE_EXCL 复刻 link 的 EEXIST 语义。 */
+async function syncCopy(path) {
+  let handle;
+  try {
+    handle = await fs.promises.open(path, 'r');
+    await handle.sync();
+  } catch (err) {
+    if (!isSyncTolerable(err)) throw err;
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+  }
+}
+function syncCopySync(path) {
+  let fd;
+  try {
+    fd = fs.openSync(path, 'r');
+    fs.fsyncSync(fd);
+  } catch (err) {
+    if (!isSyncTolerable(err)) throw err;
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch {}
+    }
+  }
 }
 const origLink = fs.link;
 if (typeof origLink === 'function') {
   fs.link = function (src, dest, cb) {
     origLink.call(this, src, dest, (err) => {
-      if (isFallback(err)) {
-        fs.rename(src, dest, cb);
-      } else {
-        cb(err);
-      }
+      if (!isFallback(err)) return cb(err);
+      fs.copyFile(src, dest, COPY_EXCL, (copyErr) => {
+        if (copyErr) return cb(copyErr);
+        syncCopy(dest).then(() => cb(null), (syncErr) => cb(syncErr));
+      });
     });
   };
 }
@@ -1330,30 +1496,31 @@ if (typeof origLinkSync === 'function') {
     try {
       return origLinkSync.call(this, src, dest);
     } catch (err) {
-      if (isFallback(err)) {
-        return fs.renameSync(src, dest);
-      }
-      throw err;
+      if (!isFallback(err)) throw err;
+      const result = fs.copyFileSync(src, dest, COPY_EXCL);
+      syncCopySync(dest);
+      return result;
     }
   };
 }
 if (fs.promises && typeof fs.promises.link === 'function') {
   const origPLink = fs.promises.link;
-  fs.promises.link = function (src, dest) {
-    return origPLink.call(this, src, dest).catch((err) => {
-      if (isFallback(err)) {
-        return fs.promises.rename(src, dest);
-      }
-      throw err;
-    });
+  fs.promises.link = async function (src, dest) {
+    try {
+      return await origPLink.call(this, src, dest);
+    } catch (err) {
+      if (!isFallback(err)) throw err;
+      await fs.promises.copyFile(src, dest, COPY_EXCL);
+      await syncCopy(dest);
+    }
   };
 }
-console.log('[dsh-link-fix] link() fallback injected');
+console.log('[dsh-link-fix] link() fallback injected (copy, source kept)');
 EOF
 ok "~/dsh-link-fix.js"
 
 # ---------- 5. wrapper ----------
-log "5/13 写入 ~/bin/dsh (--expose-internals + preload + 权限模式)"
+log "5/15 写入 ~/bin/dsh (--expose-internals + preload + 权限模式)"
 d_mkdir "$HOME_DIR/bin"
 d_out "$HOME_DIR/bin/dsh" <<'EOF'
 #!__PREFIX__/bin/bash
@@ -1365,7 +1532,7 @@ d_chmod +x "$HOME_DIR/bin/dsh"
 ok "~/bin/dsh"
 
 # ---------- 6. bwrap-proot ----------
-log "6/13 写入 ~/bin/bwrap-proot (bwrap→proot + PATH + /bin/bash 替换)"
+log "6/15 写入 ~/bin/bwrap-proot (bwrap→proot + PATH + /bin/bash 替换)"
 d_out "$HOME_DIR/bin/bwrap-proot" <<'EOF'
 #!__PREFIX__/bin/bash
 export PATH="__PREFIX__/bin:__PREFIX__/bin/applets:${PATH:-}"
@@ -1402,8 +1569,8 @@ ok "~/bin/bwrap-proot"
 
 # ---------- 7. cordis.patch.yml ----------
 # 注意：已存在的文件不会被整体覆盖——只补齐缺失的 id 块，保留你手动添加的其它配置
-log "7/13 写入 ~/.dsh/profiles/web/cordis.patch.yml (runnerCommand + shellPath)"
-PATCH_YML="$HOME_DIR/.dsh/profiles/web/cordis.patch.yml"
+log "7/15 写入 ${DSH_DATA/#$HOME_DIR/~}/profiles/web/cordis.patch.yml (runnerCommand + shellPath)"
+PATCH_YML="$DSH_DATA/profiles/web/cordis.patch.yml"
 d_mkdir "$(dirname "$PATCH_YML")"
 if [ ! -f "$PATCH_YML" ]; then
   d_out "$PATCH_YML" <<'EOF'
@@ -1454,7 +1621,7 @@ fi
 # ---------- 8. subprocess-local：terminal inspection 的 android 兼容 ----------
 # dsh 0.1.5+ 把 createProcessInspector 拆进 lib/runner-launch-<hash>.js（hash 每次发版都变），
 # 因此这里按特征字符串「new LinuxProcessInspector」动态定位文件，绝不写死文件名。
-log "8/13 补丁 dsh-subprocess-local (terminal inspection android)"
+log "8/15 补丁 dsh-subprocess-local (terminal inspection android)"
 SB_ROOT="$DSH_NM/@deepseek-ai/dsh-subprocess-local"
 if [ ! -d "$SB_ROOT" ]; then
   skip "dsh-subprocess-local 未安装（跳过）"
@@ -1468,7 +1635,7 @@ else
       if grep -qE 'platform === .android.' "$f"; then
         sb_hit=$((sb_hit+1)); continue
       fi
-      [ -f "$f.bak" ] || d_cp "$f" "$f.bak"
+      bk_save "$f" 8
       # 双引号写法（当前版本）
       d_sed 's/if (platform === "linux") return new LinuxProcessInspector/if (platform === "linux" || platform === "android") return new LinuxProcessInspector/' "$f"
       # 单引号写法（旧版本）
@@ -1485,20 +1652,22 @@ fi
 
 # ---------- 9. terminal-bash：shellPath 默认值 ----------
 # 同样动态定位（谁含旧的 /bin/bash 默认值就改谁），兼容 rc.6 旧写法与 rc.7+ 新写法。
-log "9/13 补丁 dsh-terminal-bash (shellPath 默认值)"
+log "9/15 补丁 dsh-terminal-bash (shellPath 默认值)"
 TB_ROOT="$DSH_NM/@deepseek-ai/dsh-terminal-bash"
 if [ ! -d "$TB_ROOT" ]; then
   skip "dsh-terminal-bash 未安装（跳过）"
-elif grep -rqF --exclude='*.bak' "$BASH_PATH" "$TB_ROOT/lib" 2>/dev/null; then
+elif _tb_ok; then
   ok "dsh-terminal-bash 已打补丁（跳过）"
 else
-  tb_files=$(grep -rlE --exclude='*.bak' 'DEFAULT_BASH_SHELL = "/bin/bash"|default\("/bin/bash"\)' "$TB_ROOT/lib" 2>/dev/null)
+  # 只扫 JS：类型声明（.d.ts）里出现同样的字符串不应当被改，也不应当让判据变绿
+  tb_files=$(grep -rlE --include='*.js' --include='*.mjs' --include='*.cjs' --exclude='*.bak' \
+    'DEFAULT_BASH_SHELL = "/bin/bash"|default\("/bin/bash"\)' "$TB_ROOT/lib" 2>/dev/null)
   if [ -z "$tb_files" ]; then
     fail "未找到 shellPath 的 /bin/bash 默认值——dsh 结构可能已变，请人工检查 $TB_ROOT/lib"
   else
     tb_hit=0
     for f in $tb_files; do
-      [ -f "$f.bak" ] || d_cp "$f" "$f.bak"
+      bk_save "$f" 9
       # rc.6 旧写法：shellPath: z.string().default("/bin/bash")
       d_sed 's|shellPath: z.string().default("/bin/bash")|shellPath: z.string().default("'"$BASH_PATH"'")|' "$f"
       # rc.7+ 新写法：const DEFAULT_BASH_SHELL = "/bin/bash";
@@ -1514,7 +1683,7 @@ else
 fi
 
 # ---------- 10. sharp WASM（attachment-local 依赖 sharp，android-arm64 无原生二进制） ----------
-log "10/13 补装 sharp WASM (@img/sharp-wasm32 + @emnapi)"
+log "10/15 补装 sharp WASM (@img/sharp-wasm32 + @emnapi)"
 SHARP_DIR="$DSH_NM/sharp"
 WASM_SRC="$HOME_DIR/sharp-wasm/node_modules"
 if [ ! -d "$SHARP_DIR" ]; then
@@ -1566,7 +1735,7 @@ fi
 # ---------- 11. SameSite Strict → Lax（外部 intent 打开浏览器时携带 cookie） ----------
 # 认证逻辑在 0.1.2 搬到了 browser-auth.ts，但会被打包进 lib/index.js；这里依然动态定位，
 # 以防未来再次拆包。
-log "11/13 补丁 dsh-client-connection (SameSite Strict→Lax)"
+log "11/15 补丁 dsh-client-connection (SameSite Strict→Lax)"
 CC_ROOT="$DSH_NM/@deepseek-ai/dsh-client-connection"
 if [ ! -d "$CC_ROOT" ]; then
   skip "dsh-client-connection 未安装（跳过）"
@@ -1578,7 +1747,7 @@ else
     fail "未找到 SameSite=Strict——dsh 版本可能已变，请人工检查 $CC_ROOT/lib"
   else
     for f in $cc_files; do
-      [ -f "$f.bak" ] || d_cp "$f" "$f.bak"
+      bk_save "$f" 11
       d_sed 's/SameSite=Strict/SameSite=Lax/' "$f"
     done
     if _dry || grep -rqF --exclude='*.bak' "SameSite=Lax" "$CC_ROOT/lib" 2>/dev/null; then
@@ -1593,7 +1762,7 @@ fi
 # 官方只发布了 darwin / linux-x64 / linux-arm64-gnu / win32 预编译产物，没有 android-arm64，
 # 且源码未公开、无法本地编译。这里用纯 JS 实现替代：通过 --expose-internals 直接访问同一批
 # Node 内部模块（与原生 addon 拿到的是同一个模块实例），dsh 的模块解析拦截因此可正常工作。
-log "12/13 补丁 node-addon-require-builtin (Android 无原生 binding，改用 --expose-internals)"
+log "12/15 补丁 node-addon-require-builtin (Android 无原生 binding，改用 --expose-internals)"
 NA_ROOT="$DSH_NM/node-addon-require-builtin"
 NA_FILE="$NA_ROOT/lib/index.js"
 if [ ! -f "$NA_FILE" ]; then
@@ -1603,7 +1772,7 @@ elif grep -q "js-expose-internals" "$NA_FILE" 2>/dev/null; then
 elif ! node --expose-internals -e "require('internal/modules/esm/loader')" >/dev/null 2>&1; then
   fail "当前 Node 不支持 --expose-internals，JS 兜底无法生效（请确认用 ~/bin/dsh 启动）"
 else
-  [ -f "$NA_FILE.bak" ] || d_cp "$NA_FILE" "$NA_FILE.bak"
+  bk_save "$NA_FILE" 12
   d_out "$NA_FILE" <<'EOF_JS'
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
@@ -1644,7 +1813,7 @@ fi
 # unusable 并自动降级，flock 则是硬失败，所以只需要救这一个。
 # 包里自带 src/flock.c（Node-API v8，只依赖 node_api.h 与 sys/file.h，Android bionic 有
 # flock()），所以本地用 clang 编成 system.node，放进自建的平台包，再放开平台守卫。
-log "13/13 补丁 node-addon-system (flock 的 android-arm64 本地编译)"
+log "13/15 补丁 node-addon-system (flock 的 android-arm64 本地编译)"
 NS_ROOT="$DSH_NM/@deepseek-ai/node-addon-system"
 if [ ! -d "$NS_ROOT" ]; then
   NS_ROOT=$(find "$DSH_NM" -maxdepth 4 -type d -path "*@deepseek-ai/node-addon-system" \
@@ -1719,7 +1888,7 @@ EOF_MJS
       if grep -qE "platform !== .android." "$f"; then
         ns_hit=$((ns_hit+1)); continue
       fi
-      [ -f "$f.bak" ] || d_cp "$f" "$f.bak"
+      bk_save "$f" 13
       # 单引号写法（当前版本）
       d_sed "s/if (platform !== 'linux' && platform !== 'darwin')/if (platform !== 'linux' \&\& platform !== 'darwin' \&\& platform !== 'android')/" "$f"
       # 双引号写法（兼容）
@@ -1739,14 +1908,15 @@ fi
 # 走到 /data/data 时 Termux 用户无读权限 → EACCES → 被上层兜底成
 # "prompt rejected (session/agent-busy)"，表现为"一贴图就发不出去"。
 # 这里给 syncDirectory() 加上 EACCES/EPERM/ENOENT/EROFS 容错（跳过该层 fsync）。
-log "14/14 补丁 dsh-attachment-local (Android 目录 fsync 权限容错)"
+log "14/15 补丁 dsh-attachment-local (Android 目录 fsync 权限容错)"
 AL_ROOT="$DSH_NM/@deepseek-ai/dsh-attachment-local"
 if [ ! -d "$AL_ROOT" ]; then
   skip "dsh-attachment-local 未安装（跳过）"
 elif [ ! -f "$AL_ROOT/lib/index.js" ]; then
   fail "未找到 $AL_ROOT/lib/index.js"
 else
-  AL_OUT=$(DRY_RUN="$DRY_RUN" node - "$AL_ROOT/lib/index.js" <<'ALJS'
+  bk_prepare "$AL_ROOT/lib/index.js"
+  AL_OUT=$(BK_DEST="$BK_DEST" DRY_RUN="$DRY_RUN" node - "$AL_ROOT/lib/index.js" <<'ALJS'
 const fs = require("fs");
 const p = process.argv[2];
 const MARK = "dsh-android-sync-guard";
@@ -1756,7 +1926,8 @@ const origOpen = "\tconst handle = await open(path, constants.O_RDONLY);\n";
 const origSync = "\t\tawait handle.sync();\n";
 if (s.indexOf(origOpen) < 0 || s.indexOf(origSync) < 0) { console.log("NOMATCH"); process.exit(2); }
 if (process.env.DRY_RUN === "1") { console.log("WOULD_PATCH"); process.exit(0); }
-fs.copyFileSync(p, p + ".bak");
+const bk = process.env.BK_DEST;
+if (bk) { fs.mkdirSync(require("path").dirname(bk), { recursive: true }); fs.copyFileSync(p, bk); }
 const patchedOpen =
   "\tlet handle;\n" +
   "\t/* " + MARK + ": Android 上 /data/data 等祖先目录不可读，跳过该层 fsync */\n" +
@@ -1777,7 +1948,7 @@ console.log("PATCHED");
 ALJS
 )
   case "$AL_OUT" in
-    PATCHED) ok "dsh-attachment-local 已打补丁（目录 fsync 权限容错）" ;;
+    PATCHED) ok "dsh-attachment-local 已打补丁（目录 fsync 权限容错）"; bk_note "$AL_ROOT/lib/index.js" "$BK_DEST" 14 ;;
     WOULD_PATCH) ok "（模拟）将打补丁（目录 fsync 权限容错）" ;;
     ALREADY) ok "dsh-attachment-local 已打补丁（跳过）" ;;
     NOMATCH) fail "未找到 syncDirectory 特征串——dsh 结构可能已变，请人工检查 $AL_ROOT/lib/index.js" ;;
@@ -1785,6 +1956,72 @@ ALJS
   esac
 fi
 
+
+# ---------- 15. dsh-attachment-local：Android 禁硬链接，link 失败退回复制 ----------
+# f2fs（/data）上普通用户建不了硬链接，link() 直接 EACCES；而附件写入的主路径是
+# 「staging 临时文件 --link--> 正式文件」，所以任何附件（含图片）都存不下来，
+# 表现为 ["read_image"] failed: Unable to persist attachment.
+# 这里把两处 await link(...) 换成 linkOrCopy()：硬链接失败时用 copyFile(COPYFILE_EXCL)
+# 复制（不移动源对象）；目标已存在仍抛 EEXIST，原有 digest 校验逻辑不变。
+log "15/15 补丁 dsh-attachment-local (Android 硬链接 fallback)"
+AL_ROOT2="$DSH_NM/@deepseek-ai/dsh-attachment-local"
+if [ ! -d "$AL_ROOT2" ]; then
+  skip "dsh-attachment-local 未安装（跳过）"
+elif [ ! -f "$AL_ROOT2/lib/index.js" ]; then
+  fail "未找到 $AL_ROOT2/lib/index.js"
+else
+  bk_prepare "$AL_ROOT2/lib/index.js"
+  AL_OUT2=$(BK_DEST="$BK_DEST" DRY_RUN="$DRY_RUN" node - "$AL_ROOT2/lib/index.js" <<'ALJS2'
+const fs = require("fs");
+const p = process.argv[2];
+const MARK = "dsh-android-link-guard";
+let s = fs.readFileSync(p, "utf8");
+if (s.indexOf(MARK) >= 0) { console.log("ALREADY"); process.exit(0); }
+const imp = /import\s*\{([^}]*)\}\s*from\s*"node:fs\/promises";/;
+const hit = imp.exec(s);
+if (!hit) { console.log("NOMATCH"); process.exit(2); }
+const names = hit[1].split(",").map((x) => x.trim()).filter(Boolean);
+if (names.indexOf("copyFile") < 0) names.push("copyFile");
+s = s.slice(0, hit.index) + "import { " + names.join(", ") + " } from \"node:fs/promises\";" + s.slice(hit.index + hit[0].length);
+let n1 = 0;
+let n2 = 0;
+s = s.replace(/await link\(source, target\);/g, () => { n1++; return "await linkOrCopy(source, target);"; });
+s = s.replace(/await link\(staged\.path, target\);/g, () => { n2++; return "await linkOrCopy(staged.path, target);"; });
+if (n2 !== 1) { console.log("NOMATCH"); process.exit(2); }
+const anchor = "async function syncDirectory(path) {";
+if (s.indexOf(anchor) < 0) { console.log("NOMATCH"); process.exit(2); }
+const helper = [
+  "async function linkOrCopy(source, target) {",
+  "\t/* " + MARK + ": f2fs/Termux 禁止硬链接（EACCES），退回复制；不移动源对象 */",
+  "\ttry {",
+  "\t\tawait link(source, target);",
+  "\t} catch (error) {",
+  "\t\tconst code = error && error.code;",
+  "\t\tif (!(code === \"EACCES\" || code === \"EPERM\" || code === \"ENOTSUP\" || code === \"ENOTSUPP\" || code === \"EXDEV\" || code === \"EINVAL\")) throw error;",
+  "\t\tawait copyFile(source, target, constants.COPYFILE_EXCL);",
+  "\t\tconst handle = await open(target, constants.O_RDONLY);",
+  "\t\ttry { await handle.sync(); } catch { /* Android 上 fsync 可能 EINVAL，与 syncDirectory 同口径忽略 */ } finally { await handle.close(); }",
+  "\t}",
+  "}",
+  ""
+].join("\n");
+s = s.replace(anchor, helper + anchor);
+if (!s.includes(MARK) || (s.match(/linkOrCopy/g) || []).length !== 3) { console.log("NOMATCH"); process.exit(2); }
+if (process.env.DRY_RUN === "1") { console.log("WOULD_PATCH"); process.exit(0); }
+const bk = process.env.BK_DEST;
+if (bk) { fs.mkdirSync(require("path").dirname(bk), { recursive: true }); fs.copyFileSync(p, bk); }
+fs.writeFileSync(p, s);
+console.log("PATCHED");
+ALJS2
+)
+  case "$AL_OUT2" in
+    PATCHED) ok "dsh-attachment-local 已打补丁（硬链接 fallback）"; bk_note "$AL_ROOT2/lib/index.js" "$BK_DEST" 15 ;;
+    WOULD_PATCH) ok "（模拟）将打补丁（硬链接 fallback）" ;;
+    ALREADY) ok "dsh-attachment-local 已打补丁（跳过）" ;;
+    NOMATCH) fail "未找到 link 调用点——dsh 结构可能已变，请人工检查 $AL_ROOT2/lib/index.js" ;;
+    *)       fail "补丁失败：$AL_OUT2" ;;
+  esac
+fi
 
 # ============ 自检 ============
 bar
@@ -1798,7 +2035,7 @@ if _dry; then
 fi
 
 c=0
-TOTAL=14
+TOTAL=15
 
 check() {
   local desc="$1"; shift
@@ -1826,6 +2063,22 @@ check_pkg() {
   fi
 }
 
+# 包级补丁自检（命令版）：包/目录不存在时同样 [SKIP]，并且不计入总数
+check_pkg_cmd() {
+  local desc="$1" dir="$2"; shift 2
+  if [ ! -d "$dir" ]; then
+    skip "$desc（包未安装）"
+    TOTAL=$((TOTAL-1))
+    return
+  fi
+  if "$@" >/dev/null 2>&1; then
+    echo "  [OK]   $desc"
+    c=$((c+1))
+  else
+    echo "  [FAIL] $desc"
+  fi
+}
+
 check "~/.gyp/include.gypi"            grep -q "android_ndk_path" "$HOME_DIR/.gyp/include.gypi"
 check "~/.npmrc (registry)"            grep -q "npmmirror" "$HOME_DIR/.npmrc"
 check "~/.npmrc (foreground-scripts)"  grep -q "foreground-scripts" "$HOME_DIR/.npmrc"
@@ -1835,10 +2088,11 @@ check "~/bin/dsh (可执行)"             test -x "$HOME_DIR/bin/dsh"
 check "~/bin/bwrap-proot (可执行)"     test -x "$HOME_DIR/bin/bwrap-proot"
 check "cordis.patch.yml (runnerCommand)" grep -q "runnerCommand" "$PATCH_YML"
 check_pkg "subprocess-local (android)"    "$DSH_NM/@deepseek-ai/dsh-subprocess-local" 'platform === .android.'
-check_pkg "terminal-bash (shellPath)"     "$DSH_NM/@deepseek-ai/dsh-terminal-bash"      "$BASH_PATH"
+check_pkg_cmd "terminal-bash (shellPath)" "$DSH_NM/@deepseek-ai/dsh-terminal-bash"      _tb_ok
 check_pkg "client-connection (SameSite)"  "$DSH_NM/@deepseek-ai/dsh-client-connection"  "SameSite=Lax"
 check_pkg "require-builtin (JS fallback)"  "$DSH_NM/node-addon-require-builtin"  "js-expose-internals"
 check_pkg "attachment-local (android fsync)" "$DSH_NM/@deepseek-ai/dsh-attachment-local" "dsh-android-sync-guard"
+check_pkg "attachment-local (android hardlink)" "$DSH_NM/@deepseek-ai/dsh-attachment-local" "dsh-android-link-guard"
 
 # flock 自检：产物存在、flock.js 已放开 android、真能拿到一次锁
 if [ -d "$NS_ROOT" ]; then
@@ -1851,7 +2105,7 @@ fi
 # sharp 自检只在 dsh 确实依赖 sharp 时计入
 if [ -d "$SHARP_DIR" ]; then
   TOTAL=$((TOTAL+1))
-  check "sharp-wasm32 (已就位)"        test -d "$DSH_NM/@img/sharp-wasm32"
+  check "sharp (真加载 + 编码)"         _sharp_ok
 else
   echo "  [SKIP] sharp-wasm32（当前 dsh 未依赖 sharp）"
 fi
@@ -1860,12 +2114,16 @@ bar
 echo " 完成：$c / $TOTAL 项通过"
 echo ""
 echo " 说明："
-echo "   - 第 8、9、11、12、13、14 项为包级修改，首次执行会自动备份 .bak"
+echo "   - 改动前的原件会先存成快照：~/dsh-patch-backups/<时间>/（restore 可回滚）"
 echo "   - 包级补丁按「特征字符串」动态定位文件，适配 dsh 拆包 / 改 hash 名"
 echo "   - npm 更新 dsh 后，包级补丁会被覆盖，请重新运行本脚本"
 echo "   - 第 10 项会自动匹配当前 sharp 版本并复用 ~/sharp-wasm 缓存"
 echo "   - 第 13 项用 clang 本地编译 flock.c（依赖随 nodejs 包提供的 node_api.h）"
+echo "   - 第 15 项在 f2fs 建不了硬链接时改用复制（附件多一次磁盘写，换取可用）"
 echo "   - 打完补丁后，用 'dsh web' 启动（建议先 cd ~/workspace）"
+
+  # 本次若没有任何文件被备份，就把空快照目录删掉
+  bk_finalize
 
   # 返回码即结论：全绿 0，有未通过 1（供 all / CI 判定）
   if [ "$c" -eq "$TOTAL" ]; then
@@ -1880,166 +2138,297 @@ echo "   - 打完补丁后，用 'dsh web' 启动（建议先 cd ~/workspace）"
 # 命令分发
 # ============================================================
 
+# ---------- restore：回滚到某个补丁快照 ----------
+cmd_restore() {
+  DRY_RUN=0
+  local STAMP="" ONLY="" a
+  for a in "$@"; do
+    case "$a" in
+      --dry-run) DRY_RUN=1 ;;
+      --only=*)  ONLY="${a#--only=}" ;;
+      -h|--help)
+        echo
+        info "列出快照：bash ~/apply-dsh-patches.sh restore"
+        info "回滚    ：bash ~/apply-dsh-patches.sh restore <快照> [--only=文本] [--dry-run]"
+        return 0 ;;
+      -*) echo; fail "restore 不识别：$a"; return 1 ;;
+      *)  STAMP="$a" ;;
+    esac
+  done
+
+  if [ ! -d "$BK_ROOT" ]; then
+    echo; info "还没有补丁备份：$BK_ROOT"
+    return 0
+  fi
+
+  # 不带参数：列出快照
+  if [ -z "$STAMP" ]; then
+    local -a B=()
+    local d i=0 n tot
+    for d in "$BK_ROOT"/*/; do [ -d "$d" ] && B+=("${d%/}"); done
+    echo
+    bar
+    echo " 补丁快照"
+    bar
+    if [ "${#B[@]}" -eq 0 ]; then info "（空）"; return 0; fi
+    for d in "${B[@]}"; do
+      i=$((i+1))
+      n=$(find "$d" -type f ! -name MANIFEST.txt | wc -l | tr -d ' ')
+      tot=$(du -sh "$d" 2>/dev/null | cut -f1)
+      printf ' [%d] %s  %s 个文件  %s\n' "$i" "$(basename "$d")" "$n" "$tot"
+    done
+    echo
+    info "回滚：bash ~/apply-dsh-patches.sh restore <快照>"
+    info "只看动作：加 --dry-run；只回滚部分：加 --only=index.js"
+    return 0
+  fi
+
+  case "$STAMP" in */*|*..*) echo; fail "快照名不合法：$STAMP"; return 1 ;; esac
+  local SRC="$BK_ROOT/$STAMP"
+  if [ ! -d "$SRC" ]; then
+    echo; fail "没有这个补丁快照：$STAMP"
+    info "可用：bash ~/apply-dsh-patches.sh restore"
+    return 1
+  fi
+
+  dry_banner
+  say "dsh-termux-fix 回滚补丁"
+  info "来源：$SRC"
+
+  local rel abs n=0 bad=0 skipped=0
+  while IFS= read -r rel; do
+    [ "$rel" = "MANIFEST.txt" ] && continue
+    if [ -n "$ONLY" ]; then
+      case "$rel" in *"$ONLY"*) ;; *) skipped=$((skipped+1)); continue ;; esac
+    fi
+    abs="$(bk_abs "$rel")"
+    if [ -z "$abs" ]; then
+      fail "无法解析备份路径：$rel"; bad=$((bad+1)); continue
+    fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+      printf ' （模拟）%s ← %s\n' "$abs" "$rel"
+      n=$((n+1)); continue
+    fi
+    # 回滚前先把当前文件存一份，保证回滚本身也可退回
+    [ -e "$abs" ] && bk_save "$abs" pre
+    mkdir -p "$(dirname "$abs")" || { fail "目录不可写：$(dirname "$abs")"; bad=$((bad+1)); continue; }
+    if cp -p "$SRC/$rel" "$abs" && cmp -s "$SRC/$rel" "$abs"; then
+      printf ' [OK] %s\n' "$abs"
+      n=$((n+1))
+    else
+      printf ' [FAIL] %s\n' "$abs"
+      bad=$((bad+1))
+    fi
+  done < <(cd "$SRC" && find . -type f | sed 's|^\./||' | sort)
+
+  bk_finalize
+  echo
+  if [ "$bad" -eq 0 ]; then
+    ok "已回滚 $n 个文件"
+  else
+    warn "回滚 $n 个，失败 $bad 个"
+  fi
+  [ "$skipped" -gt 0 ] && info "跳过 $skipped 个（不匹配 --only）"
+  return 0
+}
+
 # ---------- uninstall：卸载 dsh 本体与全部补丁（正规方式） ----------
 cmd_uninstall() {
   DRY_RUN=0
-  local ASSUME=0 ONLY_PATCH=0 ONLY_DSH=0 KEEP_CONF=0 PURGE_DATA=0 LIST_ONLY=0 a NARG=$#
+  local ASK=1 DO_PLUG=0 DO_DSH=0 DO_PATCH=0 DO_CONF=0 DO_RESID=0 DO_STATE=0 DO_DATA=0 LIST_ONLY=0 a NARG=$#
   for a in "$@"; do
     case "$a" in
-      --dry-run)     DRY_RUN=1 ;;
-      --yes|-y)      ASSUME=1 ;;
-      --only-patches) ONLY_PATCH=1 ;;
-      --only-dsh)    ONLY_DSH=1 ;;
-      --keep-config) KEEP_CONF=1 ;;
-      --purge-data)  PURGE_DATA=1 ;;
-      --list)        LIST_ONLY=1 ;;
-      1)             : ;;                       # 全卸（默认）
-      2)             ONLY_PATCH=1 ;;
-      3)             ONLY_DSH=1 ;;
-      4)             KEEP_CONF=1 ;;
-      5)             PURGE_DATA=1 ;;
-      *) echo; echo "  [FAIL] uninstall 不识别：$a"; echo "        可用：编号 1~5 或 --only-patches / --only-dsh / --keep-config / --purge-data / --list / --yes / --dry-run"; exit 1 ;;
+      --dry-run)      DRY_RUN=1 ;;
+      --yes|-y)       ASK=0 ;;
+      --plugins)      DO_PLUG=1 ;;
+      --dsh)          DO_DSH=1 ;;
+      --patches)      DO_PATCH=1 ;;
+      --config)       DO_CONF=1 ;;
+      --residual)     DO_RESID=1 ;;
+      --state)        DO_STATE=1 ;;
+      --data)         DO_DATA=1 ;;
+      --all)          DO_PLUG=1; DO_DSH=1; DO_PATCH=1; DO_CONF=1; DO_RESID=1; DO_STATE=1; DO_DATA=1 ;;
+      --only-dsh)     DO_DSH=1 ;;
+      --only-patches) DO_PATCH=1 ;;
+      --keep-config)  DO_DSH=1; DO_PATCH=1 ;;
+      --purge-data)   DO_PLUG=1; DO_DSH=1; DO_PATCH=1; DO_CONF=1; DO_RESID=1; DO_STATE=1; DO_DATA=1 ;;
+      --list)         LIST_ONLY=1 ;;
+      1) DO_PLUG=1 ;;
+      2) DO_DSH=1 ;;
+      3) DO_PATCH=1 ;;
+      4) DO_CONF=1 ;;
+      5) DO_RESID=1 ;;
+      6) DO_STATE=1 ;;
+      7) DO_DATA=1 ;;
+      8) DO_PLUG=1; DO_DSH=1; DO_PATCH=1; DO_CONF=1; DO_RESID=1; DO_STATE=1; DO_DATA=1 ;;
+      *) echo; echo "  [FAIL] uninstall 不识别：$a"; echo "        可用：编号 1~8 或 --plugins / --dsh / --patches / --config / --residual / --state / --data / --all / --list / --yes / --dry-run"; exit 1 ;;
     esac
   done
-  [ "$NARG" -eq 0 ] && LIST_ONLY=1   # 不带参数 → 只看范围，不动手
+
+  # dsh 数据根：全局 $DSH_DATA（= ${DSH_HOME:-~/.dsh}）
+  local DH="$DSH_DATA"
+  local DSH_BIN=""
+  if [ -x "$HOME_DIR/bin/dsh" ]; then DSH_BIN="$HOME_DIR/bin/dsh"
+  else DSH_BIN="$(command -v dsh 2>/dev/null || true)"; fi
+
+  [ "$NARG" -eq 0 ] && LIST_ONLY=1   # 不带参数 → 只列范围，不动手
   if [ "$LIST_ONLY" -eq 1 ]; then
     say "dsh-termux-fix 卸载范围"
     _bl() { printf '  [%s] %s\n' "$1" "$2"; }
-    _rm() { emit_info "      " "删除：$1"; shift; }
-    _p()  { emit_info "            " "$*"; }
-    _pf() { local f r d; for f in "$@"; do r="${f/#\~/$HOME_DIR}"; d="$(_sz "$r")"; emit_info "            " "$f  $d"; done }
-    _kp() { emit_info "      " "保留：$1"; shift; }
-
-    _bl 1 "全卸：DeepSeek Harness 本体 + 全部补丁"
-    _rm "@deepseek-ai/dsh（npm uninstall -g，不删包目录）"
-    _pf "~/bin/dsh"
-    _pf "~/bin/bwrap-proot"
-    _pf "~/dsh-link-fix.js"
-    _pf "~/dsh-flock-check.mjs"
-    _pf "~/.gyp/include.gypi"
-    _p "~/.npmrc（仅本脚本加的 2 行）"
-    _p "~/.bashrc（仅本脚本加的 1 行）"
-    _kp "~/.dsh（聊天记录）"
-    _pf "~/workspace"
-    _pf "~/dsh-backups"
-    emit_info "      " "快捷：uninstall 1    （等同 uninstall）"
+    _ln() { emit_info "      " "$1"; }
+    _bl 1 "卸载插件（正规方式）"
+    _ln "做法：dsh plugin --profile <name> remove <包…>（转发 pnpm，不手删目录）"
+    _ln "      再清理 profile package.json 里 dsh.profile.bundles 的对应条目"
+    _ln "快捷：uninstall 1    或  --plugins"
     echo
 
-    _bl 2 "只卸补丁：删启动器与兼容文件，留下 dsh 本体"
-    _rm "下列补丁文件"
-    _pf "~/bin/dsh"
-    _pf "~/bin/bwrap-proot"
-    _pf "~/dsh-link-fix.js"
-    _pf "~/dsh-flock-check.mjs"
-    _pf "~/.gyp/include.gypi"
-    _p "~/.npmrc、~/.bashrc 中本脚本加的那几行"
-    _kp "@deepseek-ai/dsh（本体）"
-    _pf "~/.dsh"
-    _pf "~/workspace"
-    emit_info "      " "快捷：uninstall 2    （等同 --only-patches）"
+    _bl 2 "卸载 dsh 本体（正规方式）"
+    _ln "做法：npm uninstall -g @deepseek-ai/dsh（不 rm -rf 包目录）"
+    _ln "快捷：uninstall 2    或  --dsh"
     echo
 
-    _bl 3 "只卸本体：npm 卸载 dsh，补丁文件全留"
-    _rm "@deepseek-ai/dsh（npm uninstall -g）"
-    _kp "下列补丁文件全部不动"
-    _pf "~/bin/dsh"
-    _pf "~/bin/bwrap-proot"
-    _pf "~/dsh-link-fix.js"
-    _pf "~/dsh-flock-check.mjs"
-    _pf "~/.gyp/include.gypi"
-    emit_info "      " "快捷：uninstall 3    （等同 --only-dsh）"
+    _bl 3 "删除补丁产物"
+    _ln "路径：~/bin/dsh  ~/bin/bwrap-proot  ~/dsh-link-fix.js  ~/dsh-flock-check.mjs  ~/.gyp/include.gypi"
+    _ln "不删：~/dsh-patch-backups（补丁前原件，留给 restore 回滚）"
+    _ln "快捷：uninstall 3    或  --patches"
     echo
 
-    _bl 4 "全卸但保留配置"
-    _rm "@deepseek-ai/dsh"
-    _pf "~/bin/dsh"
-    _pf "~/bin/bwrap-proot"
-    _pf "~/dsh-link-fix.js"
-    _pf "~/dsh-flock-check.mjs"
-    _kp "~/.npmrc、~/.bashrc（一个字不动）"
-    _pf "~/.dsh"
-    _pf "~/workspace"
-    emit_info "      " "快捷：uninstall 4    （等同 --keep-config）"
+    _bl 4 "清理配置改动"
+    _ln "路径：~/.npmrc（本脚本加的 5 行）、~/.bashrc（1 行）、profiles/*/cordis.patch.yml"
+    _ln "做法：精确删行，不重写整份文件"
+    _ln "快捷：uninstall 4    或  --config"
     echo
 
-    _bl 5 "全卸，并删掉聊天记录（~/.dsh）"
-    _rm "同第 1 项，另加下列内容"
-    _p "~/.dsh/sessions/*（全部对话记录）"
-    _p "~/.dsh/profiles/web/cordis.patch.yml（网页端设置）"
-    _kp "~/workspace"
-    _pf "~/dsh-backups"
-    _p "二次确认时要输入 PURGE"
-    emit_info "      " "快捷：uninstall 5    （等同 --purge-data）"
+    _bl 5 "删除 dsh 残留文件"
+    _ln "路径：\$DSH_HOME 下除 sessions/attachments/storages 以外的一切"
+    _ln "      （profiles/、cache/、logs/、dsh-market/、llm-deepseek/、.credentials.yaml、dream-skin.json …）"
+    _ln "快捷：uninstall 5    或  --residual"
+    echo
+
+    _bl 6 "删除插件外部状态"
+    _ln "路径：~/.config ~/.cache ~/.local/{share,state} 下的 billion-context/"
+    _ln "说明：不选它，插件卸载后这些配置与日志会留下来。"
+    _ln "快捷：uninstall 6    或  --state"
+    echo
+
+    _bl 7 "删除会话数据（不可再生）"
+    _ln "路径：\$DSH_HOME/{sessions,attachments,storages}"
+    _ln "二次确认：先问是否备份，再要求输入 PURGE"
+    _ln "快捷：uninstall 7    或  --data"
+    echo
+
+    _bl 8 "全部（= 1~7）"
+    _ln "快捷：uninstall 8    或  --all"
     echo
     emit_info "  " "不带参数 = 只看范围，不动手"
-    emit_info "  " "卸载前建议先备份：backup"
+    emit_info "  " "每项平等，没有默认；可多选：uninstall 1 3   或  --plugins --patches"
+    emit_info "  " "执行顺序固定：插件 → 本体 → 补丁 → 配置 → 残留 → 插件状态 → 会话数据"
+    emit_info "  " "不碰：node/npm/pnpm 等 pkg 依赖、~/.npm/_cacache、~/.local/share/pnpm/store、"
+    emit_info "  " "      ~/.agents、~/node_modules、~/workspace、~/package.json"
     return 0
   fi
-  if [ "$ONLY_PATCH" -eq 1 ] && [ "$ONLY_DSH" -eq 1 ]; then
-    echo; echo "  [FAIL] --only-patches 与 --only-dsh 不能同时用"; echo "        一次只能选一种范围。"; echo; exit 1
+  if [ $((DO_PLUG+DO_DSH+DO_PATCH+DO_CONF+DO_RESID+DO_STATE+DO_DATA)) -eq 0 ]; then
+    echo; warn "没有指定卸载范围"
+    info "可用：uninstall 1 5    或    uninstall --all"
+    return 1
   fi
-  local DO_DSH=1 DO_PATCH=1 DO_CONF=1 SCOPE
-  [ "$ONLY_PATCH" -eq 1 ] && DO_DSH=0
-  [ "$ONLY_DSH" -eq 1 ] && DO_PATCH=0
-  [ "$DO_PATCH" -eq 0 ] && DO_CONF=0
-  [ "$KEEP_CONF" -eq 1 ] && DO_CONF=0
-  if [ "$DO_DSH" -eq 1 ] && [ "$DO_PATCH" -eq 1 ]; then SCOPE="本体 + 补丁"
-  elif [ "$DO_DSH" -eq 1 ]; then SCOPE="仅本体，补丁保留"
-  else SCOPE="仅补丁，本体保留"; fi
+
+  local U_TOT=0 U_IDX=0
+  [ "$DO_PLUG"  -eq 1 ] && U_TOT=$((U_TOT+1))
+  [ "$DO_DSH"   -eq 1 ] && U_TOT=$((U_TOT+1))
+  [ "$DO_PATCH" -eq 1 ] && U_TOT=$((U_TOT+1))
+  [ "$DO_CONF"  -eq 1 ] && U_TOT=$((U_TOT+1))
+  [ "$DO_RESID" -eq 1 ] && U_TOT=$((U_TOT+1))
+  [ "$DO_STATE" -eq 1 ] && U_TOT=$((U_TOT+1))
+  [ "$DO_DATA"  -eq 1 ] && U_TOT=$((U_TOT+1))
 
   dry_banner
   say "dsh-termux-fix 卸载"
-  warn "卸载范围：$SCOPE"
-  if [ "$DO_DSH" -eq 1 ]; then
-    local cur=""; cur="$(pkg_ver "$DSH_ROOT" 2>/dev/null || true)"
-    emit_info "      " "本体：${cur:-未安装} → npm uninstall -g @deepseek-ai/dsh（不删包目录）"
-  else
-    emit_info "      " "本体：保留（不动 npm 包）"
-  fi
-  if [ "$DO_PATCH" -eq 1 ]; then
-    emit_info "      " "补丁：~/bin/dsh  ~/bin/bwrap-proot  ~/dsh-link-fix.js  ~/dsh-flock-check.mjs  ~/.gyp/include.gypi"
-  else
-    emit_info "      " "补丁：保留（wrapper 等文件不动）"
-  fi
-  if [ "$DO_CONF" -eq 1 ]; then
-    emit_info "      " "配置：只删本脚本加的 3 行（~/.npmrc 2 行、~/.bashrc 1 行）"
-  else
-    emit_info "      " "配置：保留（只说明，不改文件）"
+  emit_info "  " "执行顺序：插件 → 本体 → 补丁 → 配置 → 残留 → 插件状态 → 会话数据"
+  [ "$DO_PLUG"  -eq 1 ] && emit_info "  " " · 1 插件（dsh plugin remove）"
+  [ "$DO_DSH"   -eq 1 ] && emit_info "  " " · 2 本体（npm uninstall -g）"
+  [ "$DO_PATCH" -eq 1 ] && emit_info "  " " · 3 补丁产物"
+  [ "$DO_CONF"  -eq 1 ] && emit_info "  " " · 4 配置改动"
+  [ "$DO_RESID" -eq 1 ] && emit_info "  " " · 5 dsh 残留文件"
+  [ "$DO_STATE" -eq 1 ] && emit_info "  " " · 6 插件外部状态"
+  [ "$DO_DATA"  -eq 1 ] && emit_info "  " " · 7 会话数据（不可再生）"
+  if [ "$DO_DATA" -eq 0 ]; then
+    ok "保留不动：\$DSH_HOME 下的 sessions/attachments/storages"
   fi
   echo
-  if [ "$PURGE_DATA" -eq 1 ]; then
-    warn "另将删除：~/.dsh（全部聊天记录 + 网页端设置）"
-  else
-    ok "保留不动：~/.dsh（会话与配置）、~/workspace（工作区）、~/dsh-backups（备份）"
-  fi
-  echo
-  warn "建议先备份：bash ~/apply-dsh-patches.sh backup"
+  warn "建议先备份：bash ~/apply-dsh-patches.sh backup 1 2 3"
 
-  if [ "$DRY_RUN" -eq 0 ] && [ "$ASSUME" -eq 0 ]; then
+  if [ "$DRY_RUN" -eq 0 ] && [ "$ASK" -eq 1 ]; then
     local ans=""
     printf ' 继续卸载？输入 yes 确认，其他取消：'
     read -r ans || ans=""
     if [ "$ans" != "yes" ]; then echo; warn "已取消，未做任何修改"; return 1; fi
-    if [ "$PURGE_DATA" -eq 1 ]; then
-      printf ' 危险：将删除 ~/.dsh 聊天记录。确认请输入 PURGE，其他取消：'
-      read -r ans || ans=""
-      if [ "$ans" != "PURGE" ]; then echo; warn "已取消，未做任何修改"; return 1; fi
-    fi
+  fi
+  # 数据销毁确认：不受 --yes 影响
+  if [ "$DRY_RUN" -eq 0 ] && [ "$DO_DATA" -eq 1 ]; then
+    local ans2=""
+    printf ' 先备份 dsh 数据再删？[Y/n]（Y = 只做备份并结束本次卸载）：'
+    read -r ans2 || ans2=""
+    case "$ans2" in
+      n|N|no|NO) : ;;
+      *)
+        echo
+        info "开始备份最小可还原集（1 2 3，约 26M）："
+        cmd_backup 1 2 3
+        echo
+        warn "本次卸载已结束，什么都没删。"
+        info "备份好再删：bash ~/apply-dsh-patches.sh uninstall 8"
+        return 1
+        ;;
+    esac
+    local ans3=""
+    printf ' 危险：将删除 dsh 数据（会话 / 附件 / 插件状态）。确认请输入 PURGE，其他取消：'
+    read -r ans3 || ans3=""
+    if [ "$ans3" != "PURGE" ]; then echo; warn "已取消，未做任何修改"; return 1; fi
     echo
   fi
 
-  # 1) 本体（走 npm 正规卸载）
-  if [ "$DO_DSH" -eq 1 ]; then
-    log "1/3 卸载 dsh 本体"
-    d_npm uninstall -g @deepseek-ai/dsh
-  else
-    skip "--only-patches：本体保留"
+  local f x b
+  # 1) 插件（正规方式）
+  if [ "$DO_PLUG" -eq 1 ]; then
+    log "$((++U_IDX))/$U_TOT 卸载 dsh 插件（dsh plugin … remove）"
+    if [ -z "$DSH_BIN" ]; then
+      skip "找不到 dsh 命令，跳过（可先 uninstall 2 之外再手动：dsh plugin --profile web remove <包>）"
+    else
+      local prof name deps
+      for prof in "$DH"/profiles/*/; do
+        [ -d "$prof" ] || continue
+        [ -f "$prof/package.json" ] || continue
+        name="$(basename "$prof")"
+        deps="$(node -e 'const fs=require("fs");const j=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));process.stdout.write(Object.keys(j.dependencies||{}).filter(n=>!n.startsWith("@deepseek-ai/")).join(" "))' "$prof/package.json" 2>/dev/null)"
+        if [ -z "$deps" ]; then skip "profile ${name}：没有第三方插件"; continue; fi
+        info "profile ${name}：移除 $deps"
+        if _dry; then
+          d_log "dsh plugin --profile $name remove $deps"
+        else
+          "$DSH_BIN" plugin --profile "$name" remove $deps || warn "插件移除未完全成功（可能已不存在），请查看上面的 pnpm 输出"
+        fi
+        if _dry; then
+          d_log "清理 $name 的 dsh.profile.bundles 条目"
+        else
+          node -e 'const fs=require("fs");const f=process.argv[1];const j=JSON.parse(fs.readFileSync(f,"utf8"));const deps=Object.keys(j.dependencies||{});const b=j.dsh&&j.dsh.profile&&j.dsh.profile.bundles;if(Array.isArray(b)){j.dsh.profile.bundles=b.filter(x=>x.startsWith("@deepseek-ai/")||deps.includes(x));fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n");}' "$prof/package.json" || warn "bundles 条目清理失败，请手动检查 $prof/package.json"
+        fi
+      done
+      [ "$DRY_RUN" -eq 1 ] || ok "插件卸载完成"
+    fi
   fi
-  # 2) 补丁产物
+
+  # 2) 本体
+  if [ "$DO_DSH" -eq 1 ]; then
+    log "$((++U_IDX))/$U_TOT 卸载 dsh 本体（npm uninstall -g）"
+    d_npm uninstall -g @deepseek-ai/dsh
+  fi
+
+  # 3) 补丁产物
   if [ "$DO_PATCH" -eq 1 ]; then
-    log "2/3 删除补丁产物"
-    local f
-    for f in "$HOME_DIR/bin/dsh" "$HOME_DIR/bin/bwrap-proot" "$HOME_DIR/dsh-link-fix.js" "$HOME_DIR/dsh-flock-check.mjs" "$HOME_DIR/.gyp/include.gypi"; do
+    log "$((++U_IDX))/$U_TOT 删除补丁产物"
+    for f in "$HOME_DIR/bin/dsh" "$HOME_DIR/bin/bwrap-proot" "$HOME_DIR/dsh-link-fix.js" \
+             "$HOME_DIR/dsh-flock-check.mjs" "$HOME_DIR/.gyp/include.gypi"; do
       if [ -e "$f" ]; then
         d_rm "$f"
         [ "$DRY_RUN" -eq 1 ] || ok "已删 ${f#$HOME_DIR/}"
@@ -2047,44 +2436,87 @@ cmd_uninstall() {
         skip "${f#$HOME_DIR/} 不存在（跳过）"
       fi
     done
-  else
-    skip "--only-dsh：补丁保留"
   fi
-  # 3) 配置行
+
+  # 4) 配置改动
   if [ "$DO_CONF" -eq 1 ]; then
-    log "3/3 清理本脚本写入的配置行"
+    log "$((++U_IDX))/$U_TOT 清理配置改动"
     if [ -f "$HOME_DIR/.npmrc" ]; then
       d_sed -i '/^registry=https:\/\/registry.npmmirror.com$/d' "$HOME_DIR/.npmrc"
       d_sed -i '/^foreground-scripts=true$/d' "$HOME_DIR/.npmrc"
-      [ "$DRY_RUN" -eq 1 ] || ok "已清理 ~/.npmrc 中本脚本加的 2 行"
+      d_sed -i '/^fetch-retries=5$/d' "$HOME_DIR/.npmrc"
+      d_sed -i '/^fetch-retry-maxtimeout=120000$/d' "$HOME_DIR/.npmrc"
+      d_sed -i '/^fetch-timeout=600000$/d' "$HOME_DIR/.npmrc"
+      [ "$DRY_RUN" -eq 1 ] || ok "已清理 ~/.npmrc（本脚本加的 5 行）"
     else
       skip "~/.npmrc 不存在（跳过）"
     fi
     if [ -f "$HOME_DIR/.bashrc" ]; then
       d_sed -i '/^export PATH=\$HOME\/bin:\$PATH$/d' "$HOME_DIR/.bashrc"
-      [ "$DRY_RUN" -eq 1 ] || ok "已清理 ~/.bashrc 中本脚本加的 1 行"
+      [ "$DRY_RUN" -eq 1 ] || ok "已清理 ~/.bashrc（本脚本加的 1 行）"
     else
       skip "~/.bashrc 不存在（跳过）"
     fi
-  else
-    skip "配置保留（--only-dsh / --keep-config）"
+    for f in "$DH"/profiles/*/cordis.patch.yml; do
+      if [ -e "$f" ]; then
+        d_rm "$f"
+        [ "$DRY_RUN" -eq 1 ] || ok "已删 ${f#$DH/}"
+      fi
+    done
   fi
-  # 4) 可选：删掉 ~/.dsh
-  if [ "$PURGE_DATA" -eq 1 ]; then
-    log "4/4 删除 ~/.dsh（聊天记录 + 网页端设置）"
-    if [ -d "$HOME_DIR/.dsh" ]; then
-      d_rm -rf "$HOME_DIR/.dsh"
-      [ "$DRY_RUN" -eq 1 ] || ok "已删 ~/.dsh"
+
+  # 5) dsh 残留（保留会话数据三项）
+  if [ "$DO_RESID" -eq 1 ]; then
+    log "$((++U_IDX))/$U_TOT 删除 dsh 残留文件"
+    if [ -d "$DH" ]; then
+      for x in "$DH"/* "$DH"/.[!.]*; do
+        [ -e "$x" ] || continue
+        b="$(basename "$x")"
+        case "$b" in
+          sessions|attachments|storages) skip "$b 保留（归 --data，未选则不动）" ;;
+          *)
+            d_rm -rf "$x"
+            [ "$DRY_RUN" -eq 1 ] || ok "已删 $b"
+            ;;
+        esac
+      done
     else
-      skip "~/.dsh 不存在（跳过）"
+      skip "$DH 不存在（跳过）"
     fi
+  fi
+
+  # 6) 插件外部状态
+  if [ "$DO_STATE" -eq 1 ]; then
+    log "$((++U_IDX))/$U_TOT 删除插件外部状态"
+    for x in "$HOME_DIR/.config/billion-context" "$HOME_DIR/.cache/billion-context" \
+             "$HOME_DIR/.local/share/billion-context" "$HOME_DIR/.local/state/billion-context"; do
+      if [ -e "$x" ]; then
+        d_rm -rf "$x"
+        [ "$DRY_RUN" -eq 1 ] || ok "已删 ${x#$HOME_DIR/}"
+      else
+        skip "${x#$HOME_DIR/} 不存在（跳过）"
+      fi
+    done
+  fi
+
+  # 7) 会话数据
+  if [ "$DO_DATA" -eq 1 ]; then
+    log "$((++U_IDX))/$U_TOT 删除会话数据（不可再生）"
+    for x in sessions attachments storages; do
+      if [ -e "$DH/$x" ]; then
+        d_rm -rf "$DH/$x"
+        [ "$DRY_RUN" -eq 1 ] || ok "已删 $x"
+      else
+        skip "$x 不存在（跳过）"
+      fi
+    done
   fi
 
   echo
   if [ "$DRY_RUN" -eq 1 ]; then
     info "模拟结束（--dry-run，未做任何修改）"
   else
-    ok "卸载完成（范围：$SCOPE）"
+    ok "卸载完成"
     info "重新安装：bash ~/apply-dsh-patches.sh all"
   fi
   return 0
@@ -2095,153 +2527,174 @@ cmd_uninstall() {
 # ============================================================
 cmd_backup() {
   DRY_RUN=0
-  local ANY=0 B_SESS=0 B_CONF=0 B_PATCH=0 B_WS=0 B_DEST="" LIST_ONLY=0 a NARG=$#
+  local ANY=0 B_SESS=0 B_SET=0 B_PATCH=0 B_WS=0 B_PLUG=0 B_DEST="" LIST_ONLY=0 a NARG=$#
   for a in "$@"; do
     case "$a" in
       --dry-run)   DRY_RUN=1 ;;
-      --all)       ANY=1 ;;
+      --all)       ANY=1; B_SESS=1; B_SET=1; B_PATCH=1; B_WS=1; B_PLUG=1 ;;
       --sessions)  ANY=1; B_SESS=1 ;;
-      --config)    ANY=1; B_CONF=1 ;;
+      --settings)  ANY=1; B_SET=1 ;;
       --patches)   ANY=1; B_PATCH=1 ;;
       --workspace) ANY=1; B_WS=1 ;;
-      --dest=*)    ANY=1; B_DEST="${a#--dest=}" ;;
+      --plugins)   ANY=1; B_PLUG=1 ;;
+      --dest=*)    B_DEST="${a#--dest=}" ;;
       --list)      LIST_ONLY=1 ;;
       1)           ANY=1; B_SESS=1 ;;
-      2)           ANY=1; B_CONF=1 ;;
+      2)           ANY=1; B_SET=1 ;;
       3)           ANY=1; B_PATCH=1 ;;
       4)           ANY=1; B_WS=1 ;;
-      *) echo; echo "  [FAIL] backup 不识别：$a"; echo "        可用：编号 1~4 或 --all --sessions --config --patches --workspace --dest=路径 --list --dry-run"; exit 1 ;;
+      5)           ANY=1; B_PLUG=1 ;;
+      6)           ANY=1; B_SESS=1; B_SET=1; B_PATCH=1; B_WS=1; B_PLUG=1 ;;
+      *) echo; echo "  [FAIL] backup 不识别：$a"; echo "        可用：编号 1~6 或 --sessions / --settings / --patches / --workspace / --plugins / --all / --dest=路径 / --list / --dry-run"; exit 1 ;;
     esac
   done
-  [ "$NARG" -eq 0 ] && LIST_ONLY=1   # 不带参数 → 只看范围，不备份
+  # dsh 数据根：全局 $DSH_DATA（= ${DSH_HOME:-~/.dsh}）
+  local DH="$DSH_DATA"
+  _szd() { if [ -e "$1" ]; then du -sh "$1" 2>/dev/null | cut -f1; else echo "（无）"; fi; }
+  [ "$NARG" -eq 0 ] && LIST_ONLY=1   # 不带参数 → 只列范围，不备份
   if [ "$LIST_ONLY" -eq 1 ]; then
     say "dsh-termux-fix 备份范围"
-    local sz n f
-    _bl() { printf '  [%s] %s  %s\n' "$1" "$2" "$3"; }
-    _pth() {
-      local i=0 f r d
-      for f in "$@"; do
-        r="${f/#\~/$HOME_DIR}"; d="$(_sz "$r")"
-        if [ "$i" -eq 0 ]; then emit_info "      " "路径：$f  $d"
-        else emit_info "            " "$f  $d"; fi
-        i=1
-      done
-    }
-    if [ -d "$HOME_DIR/.dsh" ]; then
-      sz="$(_sz "$HOME_DIR/.dsh")"; _bl 1 "会话与配置" "$sz"
-    else _bl 1 "会话与配置" "（当前没有）"; fi
-    _pth "~/.dsh"
-    emit_info "      " "内容：sessions/*（聊天记录）+ profiles/web/cordis.patch.yml（网页端设置）"
-    emit_info "      " "说明：删了就找不回来，最该保住的一项。"
-    emit_info "      " "快捷：backup 1    （等同 --sessions）"
+    _bl() { printf '  [%s] %s\n' "$1" "$2"; }
+    _ln() { emit_info "      " "$1"; }
+    _bl 1 "会话数据（不可再生）"
+    _ln "路径：\$DSH_HOME/{sessions,attachments,storages}   默认 ~/.dsh"
+    _ln "大小：$(_szd "$DH/sessions") + $(_szd "$DH/attachments") + $(_szd "$DH/storages")"
+    _ln "说明：聊天记录、附件、成本账本与会话缓存；删了找不回来。"
+    _ln "快捷：backup 1    或  --sessions"
     echo
 
-    local -a cf=( "$HOME_DIR/.npmrc" "$HOME_DIR/.bashrc" "$HOME_DIR/.gyp" "$HOME_DIR/.dsh/profiles/web/cordis.patch.yml" )
-    n=0
-    for f in "${cf[@]}"; do [ -e "$f" ] && n=$((n+1)); done
-    _bl 2 "全局配置" "$n 个文件  $(_szs "${cf[@]}")"
-    _pth "~/.npmrc" "~/.bashrc" "~/.gyp/" "~/.dsh/profiles/web/cordis.patch.yml"
-    emit_info "      " "说明：npm 镜像、终端 PATH、编译参数、网页端补丁设置；换手机或重装时靠它还原。"
-    emit_info "      " "快捷：backup 2    （等同 --config）"
+    _bl 2 "设置与身份"
+    _ln "路径：.credentials.yaml  .anonymous-user-id  dream-skin.json  .dshw-*  settings.yaml.imported"
+    _ln "      profiles/*/{cordis.yml,package.json,pnpm-lock.yaml,pnpm-workspace.yaml,.plugin-manager}"
+    _ln "说明：登录凭据 + 界面设置 + 插件清单与锁文件；有 pnpm-lock.yaml 才能把插件原样装回来。"
+    _ln "注意：含登录凭据，备份别外传。"
+    _ln "快捷：backup 2    或  --settings"
     echo
 
-    local -a pf=( "$HOME_DIR/bin/dsh" "$HOME_DIR/bin/bwrap-proot" "$HOME_DIR/dsh-link-fix.js" "$HOME_DIR/dsh-flock-check.mjs" )
-    n=0
-    for f in "${pf[@]}"; do [ -e "$f" ] && n=$((n+1)); done
-    _bl 3 "补丁产物" "$n 个文件  $(_szs "${pf[@]}")"
-    _pth "~/bin/dsh" "~/bin/bwrap-proot" "~/dsh-link-fix.js" "~/dsh-flock-check.mjs"
-    emit_info "      " "说明：让 dsh 能在 Termux 里跑起来的启动器和兼容文件；不想重新打补丁就用它还原。"
-    emit_info "      " "快捷：backup 3    （等同 --patches）"
+    _bl 3 "补丁产物"
+    _ln "路径：~/bin/dsh  ~/bin/bwrap-proot  ~/dsh-link-fix.js  ~/dsh-flock-check.mjs"
+    _ln "      ~/.gyp/include.gypi  ~/.npmrc  ~/.bashrc  profiles/*/cordis.patch.yml"
+    _ln "说明：让 dsh 在 Termux 跑起来的全部非 npm 文件（含本脚本写进配置文件的那几行）。"
+    _ln "快捷：backup 3    或  --patches"
     echo
 
-    if [ -d "$HOME_DIR/workspace" ]; then
-      sz="$(_sz "$HOME_DIR/workspace")"; _bl 4 "工作区" "$sz"
-    else _bl 4 "工作区" "（当前没有）"; fi
-    _pth "~/workspace"
-    emit_info "      " "说明：dsh 干活时产生的文件，比如你的游戏项目和图片；通常体积最大。"
-    emit_info "      " "快捷：backup 4    （等同 --workspace）"
+    _bl 4 "工作区"
+    _ln "路径：~/workspace   大小：$(_szd "$HOME_DIR/workspace")"
+    _ln "说明：dsh 干活产生的文件；也放着 dsh-balance-simple、dsh-usage-widget 两个自建插件源码。"
+    _ln "快捷：backup 4    或  --workspace"
+    echo
+
+    _bl 5 "插件依赖与插件状态（体积最大）"
+    _ln "路径：profiles/*/node_modules  profiles/*/.dsh-market  \$DSH_HOME/dsh-market"
+    _ln "      ~/.config ~/.cache ~/.local/{share,state} 下的 billion-context/"
+    _ln "说明：99M 级，能按 lock 重装；第三方插件在 dsh home 之外的状态也在这里。"
+    _ln "注意：自建插件是软链进 ~/workspace 的，只备份 5 不备份 4 会得到断链。"
+    _ln "快捷：backup 5    或  --plugins"
+    _ln "说明：cache/、logs/、llm-deepseek/ 卸载 5 会删，但这里不备份——纯缓存日志，可再生。"
+    echo
+
+    _bl 6 "全部（= 1~5，约 125M）"
+    _ln "快捷：backup 6    或  --all"
     echo
     emit_info "  " "不带参数 = 只看范围，不备份"
-    emit_info "  " "全量：backup --all"
-    emit_info "  " "按编号：backup 1 3（可多选）"
-    emit_info "  " "按选项：backup --sessions --patches"
+    emit_info "  " "每项平等，没有默认；可多选：backup 1 2   或  --sessions --settings"
+    emit_info "  " "最小可还原集 = 1+2+3（约 26M）；要连插件一起还原再加 4+5"
     return 0
   fi
-  if [ "$ANY" -eq 0 ]; then B_SESS=1; B_CONF=1; B_PATCH=1; B_WS=1; fi
+  if [ "$ANY" -eq 0 ]; then
+    echo; warn "没有指定备份范围（--dest 只改输出目录）"
+    info "可用：backup 1 2 3    或    backup --all"
+    return 1
+  fi
+
   dry_banner
   say "dsh-termux-fix 备份"
-  local ROOT STAMP DEST REL
+  local ROOT STAMP DEST
   ROOT="${B_DEST:-$HOME_DIR/dsh-backups}"
   STAMP="$(date +%Y%m%d-%H%M%S)"
   DEST="$ROOT/$STAMP"
   info "备份目录：$DEST"
   d_mkdir "$DEST"
-  local n=0
+
+  # 用「绝对路径去掉开头的 /」打包，恢复时 tar -xzf x -C / 即可，不依赖 home 布局
+  d_tarp() {
+    local out="$1"; shift
+    local -a rel=(); local p
+    for p in "$@"; do [ -e "$p" ] && rel+=("${p#/}"); done
+    if [ "${#rel[@]}" -eq 0 ]; then skip "无可备份项：$(basename "$out")"; return 1; fi
+    if _dry; then d_log "tar -czf $(basename "$out")（${#rel[@]} 项）"; _d_mark "$out"; else
+      tar -czf "$out" -C / "${rel[@]}" 2>/dev/null
+    fi
+  }
+  local n=0 TOT=$((B_SESS+B_SET+B_PATCH+B_WS+B_PLUG))
+  local f
+
   if [ "$B_SESS" -eq 1 ]; then
-    if [ -d "$HOME_DIR/.dsh" ]; then
-      d_tar "$DEST/dsh-home.tar.gz" "$HOME_DIR" .dsh
-      [ "$DRY_RUN" -eq 1 ] || ok "dsh-home.tar.gz  $(du -h "$DEST/dsh-home.tar.gz" 2>/dev/null | cut -f1)"
-      n=$((n+1))
-    else
-      skip "~/.dsh 不存在（会话 / 配置未生成，跳过）"
+    log "$((++n))/$TOT 会话数据"
+    if d_tarp "$DEST/sessions.tar.gz" "$DH/sessions" "$DH/attachments" "$DH/storages"; then
+      [ "$DRY_RUN" -eq 1 ] || ok "sessions.tar.gz  $(du -h "$DEST/sessions.tar.gz" 2>/dev/null | cut -f1)"
     fi
   fi
-  if [ "$B_CONF" -eq 1 ]; then
-    local cf=() f
-    for f in "$HOME_DIR/.npmrc" "$HOME_DIR/.bashrc" "$HOME_DIR/.gyp" "$HOME_DIR/.dsh/profiles/web/cordis.patch.yml"; do
-      [ -e "$f" ] && cf+=("${f#$HOME_DIR/}")
+
+  if [ "$B_SET" -eq 1 ]; then
+    log "$((++n))/$TOT 设置与身份"
+    local -a setp=( "$DH/.credentials.yaml" "$DH/.anonymous-user-id" "$DH/dream-skin.json"
+                    "$DH"/.dshw-* "$DH/settings.yaml.imported" )
+    for f in "$DH"/profiles/*/cordis.yml "$DH"/profiles/*/package.json "$DH"/profiles/*/pnpm-lock.yaml \
+             "$DH"/profiles/*/pnpm-workspace.yaml "$DH"/profiles/*/.plugin-manager; do
+      [ -e "$f" ] && setp+=("$f")
     done
-    if [ "${#cf[@]}" -gt 0 ]; then
-      d_tar "$DEST/config.tar.gz" "$HOME_DIR" "${cf[@]}"
-      [ "$DRY_RUN" -eq 1 ] || ok "config.tar.gz  ${cf[*]}"
-      n=$((n+1))
-    else
-      skip "没有可备份的配置（.npmrc / .bashrc / .gyp / cordis.patch.yml）"
+    if d_tarp "$DEST/settings.tar.gz" "${setp[@]}"; then
+      [ "$DRY_RUN" -eq 1 ] || ok "settings.tar.gz  $(du -h "$DEST/settings.tar.gz" 2>/dev/null | cut -f1)（含登录凭据）"
     fi
   fi
+
   if [ "$B_PATCH" -eq 1 ]; then
-    local pf=() f
-    for f in "$HOME_DIR/bin/dsh" "$HOME_DIR/bin/bwrap-proot" "$HOME_DIR/dsh-link-fix.js" "$HOME_DIR/dsh-flock-check.mjs"; do
-      [ -e "$f" ] && pf+=("${f#$HOME_DIR/}")
+    log "$((++n))/$TOT 补丁产物"
+    local -a pp=( "$HOME_DIR/bin/dsh" "$HOME_DIR/bin/bwrap-proot" "$HOME_DIR/dsh-link-fix.js"
+                  "$HOME_DIR/dsh-flock-check.mjs" "$HOME_DIR/.gyp/include.gypi"
+                  "$HOME_DIR/.npmrc" "$HOME_DIR/.bashrc" )
+    for f in "$DH"/profiles/*/cordis.patch.yml; do
+      [ -e "$f" ] && pp+=("$f")
     done
-    if [ "${#pf[@]}" -gt 0 ]; then
-      d_tar "$DEST/patches.tar.gz" "$HOME_DIR" "${pf[@]}"
-      [ "$DRY_RUN" -eq 1 ] || ok "patches.tar.gz  ${pf[*]}"
-      n=$((n+1))
-    else
-      skip "没有补丁产物（~/bin / dsh-link-fix.js）"
+    if d_tarp "$DEST/patches.tar.gz" "${pp[@]}"; then
+      [ "$DRY_RUN" -eq 1 ] || ok "patches.tar.gz  ${#pp[@]} 项"
     fi
   fi
+
   if [ "$B_WS" -eq 1 ]; then
-    if [ -d "$HOME_DIR/workspace" ]; then
-      d_tar "$DEST/workspace.tar.gz" "$HOME_DIR" workspace
+    log "$((++n))/$TOT 工作区"
+    if d_tarp "$DEST/workspace.tar.gz" "$HOME_DIR/workspace"; then
       [ "$DRY_RUN" -eq 1 ] || ok "workspace.tar.gz  $(du -h "$DEST/workspace.tar.gz" 2>/dev/null | cut -f1)"
-      n=$((n+1))
-    else
-      skip "~/workspace 不存在（没有工作区内容）"
     fi
   fi
+
+  if [ "$B_PLUG" -eq 1 ]; then
+    log "$((++n))/$TOT 插件依赖与插件状态"
+    local -a plp=()
+    for f in "$DH"/profiles/*/node_modules "$DH"/profiles/node_modules "$DH"/profiles/*/.dsh-market "$DH/dsh-market" \
+             "$HOME_DIR/.config/billion-context" "$HOME_DIR/.cache/billion-context" \
+             "$HOME_DIR/.local/share/billion-context" "$HOME_DIR/.local/state/billion-context"; do
+      [ -e "$f" ] && plp+=("$f")
+    done
+    if d_tarp "$DEST/plugins.tar.gz" "${plp[@]}"; then
+      [ "$DRY_RUN" -eq 1 ] || ok "plugins.tar.gz  $(du -h "$DEST/plugins.tar.gz" 2>/dev/null | cut -f1)"
+    fi
+  fi
+
   d_out "$DEST/MANIFEST.txt" <<EOF
 备份时间：$(date "+%Y-%m-%d %H:%M:%S")
 DeepSeek Harness：$(pkg_ver "$DSH_ROOT" 2>/dev/null || echo 未安装)
-平台：$(uname -m) / Android $(getprop ro.build.version.release 2>/dev/null || echo ?)
-包含项数：$(echo "$n")
-
-还原方式：
-  tar xzf dsh-home.tar.gz -C ~      # 会话与配置
-  tar xzf config.tar.gz   -C ~      # shell / npm / cordis 配置
-  tar xzf patches.tar.gz  -C ~      # 补丁产物（wrapper 等）
-  tar xzf workspace.tar.gz -C ~     # 工作区
+dsh 数据根：$DH
+范围：sessions=$B_SESS settings=$B_SET patches=$B_PATCH workspace=$B_WS plugins=$B_PLUG
+恢复：tar -xzf <包名> -C /（sessions/settings/plugins 解到 dsh 数据根，patches/workspace 解到 home）
 EOF
+  echo
   if [ "$DRY_RUN" -eq 1 ]; then
-    [ "$n" -gt 0 ] && ok "模拟完成：共 $n 项（未实际打包）"
-    echo
-    bar; echo " 模拟结束"; bar
+    info "模拟结束（--dry-run，未写任何文件）"
   else
-    [ "$n" -gt 0 ] || warn "没有任何内容被备份（相关路径都不存在）"
-    echo
-    bar; echo " 备份完成：$DEST"; bar
-    info "还原：tar xzf <某个.tar.gz> -C ~（详见 MANIFEST.txt）"
+    ok "备份完成：$DEST"
+    info "恢复：cd /  &&  tar -xzf $DEST/<包名>.tar.gz"
   fi
   return 0
 }
@@ -2260,7 +2713,7 @@ no_opt_guard() {
 if [ "$TERMUX_OK" -eq 0 ]; then
   case "$CMD" in
     status|doctor|channels) : ;;          # 只读：照常运行
-    patch|install|all|backup|uninstall)   # 会写 Termux 路径：拦住
+    patch|install|all|backup|uninstall|restore)   # 会写 Termux 路径：拦住
       echo
       echo "  [FAIL] 找不到 Termux 运行环境：$PREFIX/bin/bash"
       echo "         本脚本只能在 Termux（Android）内运行；$CMD 会写入 Termux 路径，已中止。"
@@ -2279,6 +2732,7 @@ case "$CMD" in
   all)     cmd_all "${ARGS[@]}" ;;
   channels) no_opt_guard; cmd_channels ;;
   backup)   cmd_backup "${ARGS[@]}" ;;
+  restore)  cmd_restore "${ARGS[@]}" ;;
   uninstall) cmd_uninstall "${ARGS[@]}" ;;
   *)       echo; echo "  [FAIL] 未知命令：$CMD"; echo; usage 1 ;;
 esac
