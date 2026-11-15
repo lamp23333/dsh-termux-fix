@@ -144,12 +144,12 @@ MANIFEST.txt       # 时间、版本、数据根、范围、还原方式
 
 - 单文件还原：
 ```bash
-tar -xzf ~/dsh-backups/[YYYYmmdd-HHMMSS]/<name>.tar.gz -C /
+tar -xzf ~/dsh-backups/[YYYYmmdd-HHMMSS]/<name>.tar.gz -C ~
 ```
 
 - 全部还原：
 ```bash
-for f in ~/dsh-backups/[YYYYmmdd-HHMMSS]/*.tar.gz; do tar -xzf "$f" -C /; done
+for f in ~/dsh-backups/[YYYYmmdd-HHMMSS]/*.tar.gz; do tar -xzf "$f" -C ~; done
 ```
 
 尖括号中为自填内容。

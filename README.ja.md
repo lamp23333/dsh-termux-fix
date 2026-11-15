@@ -144,12 +144,12 @@ MANIFEST.txt       # 日時、バージョン、データディレクトリ、�
 
 - 単一ファイルを復元：
 ```bash
-tar -xzf ~/dsh-backups/[YYYYmmdd-HHMMSS]/<name>.tar.gz -C /
+tar -xzf ~/dsh-backups/[YYYYmmdd-HHMMSS]/<name>.tar.gz -C ~
 ```
 
 - すべて復元：
 ```bash
-for f in ~/dsh-backups/[YYYYmmdd-HHMMSS]/*.tar.gz; do tar -xzf "$f" -C /; done
+for f in ~/dsh-backups/[YYYYmmdd-HHMMSS]/*.tar.gz; do tar -xzf "$f" -C ~; done
 ```
 
 山かっこ内はご自身の値に置き換えてください。

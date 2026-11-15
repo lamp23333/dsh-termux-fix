@@ -18,7 +18,7 @@
 #   4. ~/dsh-link-fix.js            —— f2fs 禁硬链接的 fs.link fallback
 #   5. ~/bin/dsh                    —— wrapper：--expose-internals + preload + 权限模式
 #   6. ~/bin/bwrap-proot            —— bwrap→proot + PATH + /bin/bash 替换
-#   7. cordis.patch.yml             —— sandbox runnerCommand + terminal-bash shellPath
+#   7. cordis.patch.yml             —— sandbox runnerCommand
 #   8. dsh-subprocess-local         —— terminal inspection 的 android 兼容（动态 sed）
 #   9. dsh-terminal-bash            —— shellPath 默认值 /bin/bash → PREFIX（动态 sed）
 #  10. sharp WASM                   —— @img/sharp-wasm32 + @emnapi（attachment-local）
@@ -1255,9 +1255,30 @@ phase2() {
   # node-pty：Android 无可用预编译产物，必须源码编译（gyp 前置已在阶段 1 写好）
   if [ -d "$DSH_NM/node-pty" ]; then
     info "重建 node-pty（源码编译，1~5 分钟，勿中断）"
-    ( cd "$DSH_ROOT" && npm_config_build_from_source=true npm rebuild node-pty --foreground-scripts ) 2>&1 | tee -a "$LOG_FILE"
-    if ( cd "$DSH_ROOT" && node -e "const p=require('node-pty'); if(typeof p.spawn!=='function') process.exit(1)" ) >/dev/null 2>&1; then
+    # npm 12+ 默认拦截依赖的 install 脚本；node-pty 靠它调 node-gyp，必须显式放行。
+    # 先用环境变量放行（不改用户配置），失败再用官方 approve 写进包的 allowScripts。
+    NPM_MAJOR="$(npm -v 2>/dev/null | cut -d. -f1)"
+    _pty_ok()   { ( cd "$DSH_ROOT" && node -e "const p=require('node-pty'); if(typeof p.spawn!=='function') process.exit(1)" ) >/dev/null 2>&1; }
+    _pty_build() {
+      if [ "${NPM_MAJOR:-0}" -ge 12 ] 2>/dev/null; then
+        ( cd "$DSH_ROOT" && env npm_config_allow_scripts="node-pty" npm_config_build_from_source=true npm rebuild node-pty --foreground-scripts ) 2>&1 | tee -a "$LOG_FILE"
+      else
+        ( cd "$DSH_ROOT" && npm_config_build_from_source=true npm rebuild node-pty --foreground-scripts ) 2>&1 | tee -a "$LOG_FILE"
+      fi
+    }
+    _pty_build
+    if _pty_ok; then
       ok "node-pty: OK"
+    elif [ "${NPM_MAJOR:-0}" -ge 12 ] 2>/dev/null; then
+      info "npm $NPM_MAJOR 拦截了 install 脚本，显式批准 node-pty 后重试"
+      ( cd "$DSH_ROOT" && npm install-scripts approve node-pty --no-allow-scripts-pin ) >>"$LOG_FILE" 2>&1 || true
+      _pty_build
+      if _pty_ok; then
+        ok "node-pty: OK（已放行 install 脚本）"
+      else
+        warn "node-pty 仍不可用 —— 常见原因：clang/make 缺失、~/.gyp/include.gypi 被覆盖、python3 找不到"
+        info "手动复查：cd $DSH_ROOT && npm_config_allow_scripts=node-pty npm_config_build_from_source=true npm rebuild node-pty"
+      fi
     else
       warn "node-pty 仍不可用 —— 常见原因：clang/make 缺失、~/.gyp/include.gypi 被覆盖、python3 找不到"
       info "手动复查：cd $DSH_ROOT && npm_config_build_from_source=true npm rebuild node-pty"
@@ -1569,7 +1590,9 @@ ok "~/bin/bwrap-proot"
 
 # ---------- 7. cordis.patch.yml ----------
 # 注意：已存在的文件不会被整体覆盖——只补齐缺失的 id 块，保留你手动添加的其它配置
-log "7/15 写入 ${DSH_DATA/#$HOME_DIR/~}/profiles/web/cordis.patch.yml (runnerCommand + shellPath)"
+# terminal-bash 的 shellPath 由第 9 项直接改源码默认值；0.2.2 起该条目嵌套在终端
+# bundle 内，根层 patch 命中不到，写了只会让启动多一条 WARN，故不再写入。
+log "7/15 写入 ${DSH_DATA/#$HOME_DIR/~}/profiles/web/cordis.patch.yml (runnerCommand)"
 PATCH_YML="$DSH_DATA/profiles/web/cordis.patch.yml"
 d_mkdir "$(dirname "$PATCH_YML")"
 if [ ! -f "$PATCH_YML" ]; then
@@ -1580,17 +1603,12 @@ if [ ! -f "$PATCH_YML" ]; then
       - __HOME__/bin/bwrap-proot
     runnerFailureSignatures:
       - "permission denied"
-- id: terminal-bash
-  config:
-    shellPath: __PREFIX__/bin/bash
 EOF
   _fill_paths "$PATCH_YML"
   ok "cordis.patch.yml（新建）"
 else
   need_sandbox=0
-  need_terminal=0
   grep -qE '^[[:space:]]*-[[:space:]]*id:[[:space:]]*sandbox[[:space:]]*$' "$PATCH_YML" || need_sandbox=1
-  grep -qE '^[[:space:]]*-[[:space:]]*id:[[:space:]]*terminal-bash[[:space:]]*$' "$PATCH_YML" || need_terminal=1
   if [ "$need_sandbox" = 1 ]; then
     d_outa "$PATCH_YML" <<'EOF'
 
@@ -1602,17 +1620,9 @@ else
       - "permission denied"
 EOF
   fi
-  if [ "$need_terminal" = 1 ]; then
-    d_outa "$PATCH_YML" <<'EOF'
-
-- id: terminal-bash
-  config:
-    shellPath: __PREFIX__/bin/bash
-EOF
-  fi
   _fill_paths "$PATCH_YML"
-  if [ "$need_sandbox" = 0 ] && [ "$need_terminal" = 0 ]; then
-    ok "cordis.patch.yml（已含 sandbox + terminal-bash，跳过）"
+  if [ "$need_sandbox" = 0 ]; then
+    ok "cordis.patch.yml（已含 sandbox，跳过）"
   else
     ok "cordis.patch.yml（已补齐缺失块）"
   fi
@@ -2609,21 +2619,36 @@ cmd_backup() {
 
   dry_banner
   say "dsh-termux-fix 备份"
-  local ROOT STAMP DEST
+  local ROOT STAMP DEST BK_BAD=0 LOG_FILE
   ROOT="${B_DEST:-$HOME_DIR/dsh-backups}"
   STAMP="$(date +%Y%m%d-%H%M%S)"
   DEST="$ROOT/$STAMP"
   info "备份目录：$DEST"
   d_mkdir "$DEST"
+  LOG_FILE="$DEST/backup.log"
 
-  # 用「绝对路径去掉开头的 /」打包，恢复时 tar -xzf x -C / 即可，不依赖 home 布局
+  # 以 $HOME_DIR 为根打包：Termux 无权 open("/")，tar -C / 会直接失败并留下空包
   d_tarp() {
     local out="$1"; shift
     local -a rel=(); local p
-    for p in "$@"; do [ -e "$p" ] && rel+=("${p#/}"); done
+    for p in "$@"; do
+      [ -e "$p" ] || continue
+      case "$p" in
+        "$HOME_DIR"/*) rel+=("${p#"$HOME_DIR"/}") ;;
+        "$HOME_DIR")   rel+=(".") ;;
+        *) fail "不在 Home 下，无法打包：$p"; return 1 ;;
+      esac
+    done
     if [ "${#rel[@]}" -eq 0 ]; then skip "无可备份项：$(basename "$out")"; return 1; fi
-    if _dry; then d_log "tar -czf $(basename "$out")（${#rel[@]} 项）"; _d_mark "$out"; else
-      tar -czf "$out" -C / "${rel[@]}" 2>/dev/null
+    if _dry; then
+      d_log "tar -czf $(basename "$out")（${#rel[@]} 项）"; _d_mark "$out"
+    else
+      if ! ( cd "$HOME_DIR" && tar -czf "$out" "${rel[@]}" ) 2>>"$LOG_FILE"; then
+        fail "打包失败：$(basename "$out")"; BK_BAD=$((BK_BAD+1)); return 1
+      fi
+      if [ ! -s "$out" ] || [ -z "$(tar -tzf "$out" 2>/dev/null | head -1)" ]; then
+        fail "打包结果为空：$(basename "$out")"; BK_BAD=$((BK_BAD+1)); return 1
+      fi
     fi
   }
   local n=0 TOT=$((B_SESS+B_SET+B_PATCH+B_WS+B_PLUG))
@@ -2681,20 +2706,22 @@ cmd_backup() {
       [ "$DRY_RUN" -eq 1 ] || ok "plugins.tar.gz  $(du -h "$DEST/plugins.tar.gz" 2>/dev/null | cut -f1)"
     fi
   fi
-
+  if [ "$BK_BAD" -ne 0 ]; then
+    echo; fail "有 $BK_BAD 个包打包失败，详见 $LOG_FILE"; return 1
+  fi
   d_out "$DEST/MANIFEST.txt" <<EOF
 备份时间：$(date "+%Y-%m-%d %H:%M:%S")
 DeepSeek Harness：$(pkg_ver "$DSH_ROOT" 2>/dev/null || echo 未安装)
 dsh 数据根：$DH
 范围：sessions=$B_SESS settings=$B_SET patches=$B_PATCH workspace=$B_WS plugins=$B_PLUG
-恢复：tar -xzf <包名> -C /（sessions/settings/plugins 解到 dsh 数据根，patches/workspace 解到 home）
+恢复：tar -xzf <包名> -C $HOME_DIR（sessions/settings/plugins 解到 dsh 数据根，patches/workspace 解到 home）
 EOF
   echo
   if [ "$DRY_RUN" -eq 1 ]; then
     info "模拟结束（--dry-run，未写任何文件）"
   else
     ok "备份完成：$DEST"
-    info "恢复：cd /  &&  tar -xzf $DEST/<包名>.tar.gz"
+    info "恢复：cd $HOME_DIR && tar -xzf $DEST/<包名>.tar.gz"
   fi
   return 0
 }

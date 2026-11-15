@@ -144,12 +144,12 @@ MANIFEST.txt       # time, version, data root, scope, restore method
 
 - Restore a single file:
 ```bash
-tar -xzf ~/dsh-backups/[YYYYmmdd-HHMMSS]/<name>.tar.gz -C /
+tar -xzf ~/dsh-backups/[YYYYmmdd-HHMMSS]/<name>.tar.gz -C ~
 ```
 
 - Restore everything:
 ```bash
-for f in ~/dsh-backups/[YYYYmmdd-HHMMSS]/*.tar.gz; do tar -xzf "$f" -C /; done
+for f in ~/dsh-backups/[YYYYmmdd-HHMMSS]/*.tar.gz; do tar -xzf "$f" -C ~; done
 ```
 
 Replace the text in angle brackets with your own values.
