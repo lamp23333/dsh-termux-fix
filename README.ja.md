@@ -1,14 +1,24 @@
-[![lang-zh-hans](https://img.shields.io/badge/简体中文-AAAAAA?style=for-the-badge)](./README.zh-hans.md)
-[![lang-zh-hant](https://img.shields.io/badge/繁體中文-AAAAAA?style=for-the-badge)](./README.zh-hant.md)
-[![lang-en](https://img.shields.io/badge/English-AAAAAA?style=for-the-badge)](./README.md)
-![lang-ja](https://img.shields.io/badge/日本語-555555?style=for-the-badge)
+[![简体中文](./badge/zh-hans_off.svg)](./README.zh-hans.md)
+[![繁體中文](./badge/zh-hant_off.svg)](./README.zh-hant.md)
+[![English](./badge/en_off.svg)](./README.md)
+![日本語](./badge/ja_on.svg)
+
+<!-- https://img.shields.io/badge/简体中文-AAAAAA?style=for-the-badge -->
+<!-- https://img.shields.io/badge/繁體中文-AAAAAA?style=for-the-badge -->
+<!-- https://img.shields.io/badge/English-AAAAAA?style=for-the-badge -->
+<!-- https://img.shields.io/badge/日本語-555555?style=for-the-badge -->
 
 # dsh-termux-fix
 
-[![License](https://img.shields.io/badge/License-MIT-A31F34?style=flat-square)](./LICENSE)
-[![dsh](https://img.shields.io/badge/Made_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://www.deepseek.com/harness)
-[![Website](https://img.shields.io/badge/Official_Website-555555?style=flat-square)](https://lamp23333.github.io/dshtermux)
-[![Android](https://img.shields.io/badge/Powered_by-Android-3DDC84?style=flat-square&logo=android&logoColor=white)](https://developer.android.google.cn/about)
+[![license](./badge/license.svg)](./LICENSE)
+[![dsh](./badge/dsh.svg)](https://www.deepseek.com/harness)
+[![website](./badge/website.svg)](https://lamp23333.github.io/dshtermux)
+[![android](./badge/android.svg)](https://developer.android.google.cn/about)
+
+<!-- https://img.shields.io/badge/License-MIT-A31F34?style=flat-square -->
+<!-- https://img.shields.io/badge/Made_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white -->
+<!-- https://img.shields.io/badge/Official_Website-555555?style=flat-square -->
+<!-- https://img.shields.io/badge/Powered_by-Android-3DDC84?style=flat-square&logo=android&logoColor=white -->
 
 **ワンクリックパッチスクリプト** — [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) を Android 上の Termux 環境で正常に動作させるためのものです。
 
@@ -246,7 +256,7 @@ bash ~/apply-dsh-patches.sh uninstall --all
 - **パスの自動調整**：`PREFIX` / `HOME` は検証してから採用します（空でないこと、絶対パスであること、`.../com.termux/files/usr` の形であること、`$PREFIX/bin/bash` が実際に実行可能であること）。いずれかの条件を満たさない場合は公式のデフォルトパスにフォールバックします。生成される wrapper と `cordis.patch.yml` も実際のパスに合わせて注入されます。
 - **Termux 外でも診断可能**：Termux の中で実行していない場合でも、`help` / `status` / `doctor` / `channels` は通常どおり使え、ファイル書き込み系のコマンドはエラーを出してすぐ終了します。
 - **範囲を明示、デフォルトなし**：`backup` / `uninstall` の各範囲は対等で、引数なしでは範囲を一覧表示するだけです。`--yes` でもデータ破棄の確認は省略できません（セッションデータの削除には `PURGE` の手入力が必要です）。
-**公式のデータディレクトリに追従**：`status`、7 番目のパッチ、`backup`、`uninstall` はいずれも `${DSH_HOME:-~/.dsh}` でデータディレクトリを解決し、`~/.dsh` を決め打ちしません。
+- **公式のデータディレクトリに追従**：`status`、7 番目のパッチ、`backup`、`uninstall` はいずれも `${DSH_HOME:-~/.dsh}` でデータディレクトリを解決し、`~/.dsh` を決め打ちしません。
 
 ## 原理の概要
 

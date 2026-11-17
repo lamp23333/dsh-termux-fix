@@ -1,14 +1,24 @@
-[![lang-zh-hans](https://img.shields.io/badge/简体中文-AAAAAA?style=for-the-badge)](./README.zh-hans.md)
-![lang-zh-hant](https://img.shields.io/badge/繁體中文-555555?style=for-the-badge)
-[![lang-en](https://img.shields.io/badge/English-AAAAAA?style=for-the-badge)](./README.md)
-[![lang-ja](https://img.shields.io/badge/日本語-AAAAAA?style=for-the-badge)](./README.ja.md)
+[![简体中文](./badge/zh-hans_off.svg)](./README.zh-hans.md)
+![繁體中文](./badge/zh-hant_on.svg)
+[![English](./badge/en_off.svg)](./README.md)
+[![日本語](./badge/ja_off.svg)](./README.ja.md)
+
+<!-- https://img.shields.io/badge/简体中文-AAAAAA?style=for-the-badge -->
+<!-- https://img.shields.io/badge/繁體中文-555555?style=for-the-badge -->
+<!-- https://img.shields.io/badge/English-AAAAAA?style=for-the-badge -->
+<!-- https://img.shields.io/badge/日本語-AAAAAA?style=for-the-badge -->
 
 # dsh-termux-fix
 
-[![License](https://img.shields.io/badge/License-MIT-A31F34?style=flat-square)](./LICENSE)
-[![dsh](https://img.shields.io/badge/Made_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://www.deepseek.com/harness)
-[![Website](https://img.shields.io/badge/Official_Website-555555?style=flat-square)](https://lamp23333.github.io/dshtermux)
-[![Android](https://img.shields.io/badge/Powered_by-Android-3DDC84?style=flat-square&logo=android&logoColor=white)](https://developer.android.google.cn/about)
+[![license](./badge/license.svg)](./LICENSE)
+[![dsh](./badge/dsh.svg)](https://www.deepseek.com/harness)
+[![website](./badge/website.svg)](https://lamp23333.github.io/dshtermux)
+[![android](./badge/android.svg)](https://developer.android.google.cn/about)
+
+<!-- https://img.shields.io/badge/License-MIT-A31F34?style=flat-square -->
+<!-- https://img.shields.io/badge/Made_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white -->
+<!-- https://img.shields.io/badge/Official_Website-555555?style=flat-square -->
+<!-- https://img.shields.io/badge/Powered_by-Android-3DDC84?style=flat-square&logo=android&logoColor=white -->
 
 **一鍵修補腳本**，讓 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 在 Android 的 Termux 環境中正常執行。
 
