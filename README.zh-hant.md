@@ -1,7 +1,7 @@
-[![简体中文](./badge/zh-hans_off.svg)](./README.zh-hans.md)
-![繁體中文](./badge/zh-hant_on.svg)
-[![English](./badge/en_off.svg)](./README.md)
-[![日本語](./badge/ja_off.svg)](./README.ja.md)
+[![简体中文](https://lamp23333.github.io/badge/zh-hans_off.svg)](./README.zh-hans.md)
+![繁體中文](https://lamp23333.github.io/badge/zh-hant_on.svg)
+[![English](https://lamp23333.github.io/badge/en_off.svg)](./README.md)
+[![日本語](https://lamp23333.github.io/badge/ja_off.svg)](./README.ja.md)
 
 <!-- https://img.shields.io/badge/简体中文-AAAAAA?style=for-the-badge -->
 <!-- https://img.shields.io/badge/繁體中文-555555?style=for-the-badge -->
